@@ -166,7 +166,8 @@ codepilot/
 │   ├── domain/
 │   │   ├── entities.py
 │   │   ├── enums.py
-│   │   └── ports/              # repositories/llm_provider/tool/workspace/executor/events
+│   │   ├── events.py           # Agent 运行时事件（无框架）
+│   │   └── ports/              # workspace / executor / repositories / agent
 │   ├── application/
 │   │   ├── session_service.py
 │   │   ├── chat_service.py
@@ -192,7 +193,7 @@ codepilot/
 
 ### 5.2 依赖注入与装配
 - 应用级 `Container`（`core/di.py`）构造 Repository/Provider/Workspace/Executor/ToolRegistry/AgentEngine，注入 Application 服务；Application 服务注入 ViewModel。
-- 领域层只依赖 `domain/ports`；测试注入 Fake（`FakeLLMProvider`/内存 Repo），**可无 GUI 测试**。
+- 领域层只依赖 `domain/ports`；测试注入 Fake（`FakeChatModel`（注入 agent 引擎）/内存 Repo），**可无 GUI 测试**。
 
 ### 5.3 配置
 - `pydantic-settings`：环境变量 > 用户配置文件（`~/.codepilot/config.toml`）> 默认值。
@@ -286,6 +287,7 @@ IDLE → PLANNING ⇄ RE_PLANNING
 ### 6.7 框架隔离
 - 双向映射：domain `Message/ToolCall` ↔ LangChain `BaseMessage`；LangGraph 事件 ↔ 应用事件（供 GUI）。
 - 依赖注入：GUI/Application 依赖 `domain/ports/agent.py::AgentOrchestrator`；实现为 `infrastructure/agent`。
+- LLM Provider（`ChatModelFactory`）与 Tool 属**基础设施内部接缝**（`infrastructure/providers`、`infrastructure/agent`），不作为领域端口暴露。
 - **Presentation / Domain / Application 均不 import `langchain/langgraph`**。
 
 ### 6.8 依赖与版本治理

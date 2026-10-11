@@ -59,7 +59,7 @@ ui ─▶ application ─▶ domain ◀─ infrastructure(实现 ports)
 | 私有 | 前缀下划线 | `_internal_cache` |
 | 类型别名 | 大驼峰 | `SessionId = str` |
 | 枚举 | 大驼峰类 + 大写成员 | `class ToolSafety: READ=...` |
-| 端口（接口） | 名词/`Protocol` | `LLMProvider`, `WorkspaceProvider` |
+| 端口（接口） | 名词/`Protocol` | `AgentOrchestrator`, `WorkspaceProvider` |
 | 适配器实现 | 前缀技术名 | `OpenAIProvider`, `LocalExecutor` |
 
 - **布尔**用 `is_/has_/should_` 前缀：`is_truncated`。

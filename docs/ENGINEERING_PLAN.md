@@ -48,7 +48,7 @@
 
 ### P1 基础闭环
 **目标**：端到端跑通"选目录 → 对话 → 读 → 改(确认) → 执行"。
-- WS-1.1 领域层：Entities + Ports（Session/Message/ToolCall/Approval；LLMProvider/Tool/Workspace/Executor/Repository）
+- WS-1.1 领域层：Entities + Events + Ports（Session/Message/ToolCall/Approval；Workspace/Executor/Repository/AgentOrchestrator）
 - WS-1.2 持久化：SQLAlchemy(async)+aiosqlite、Alembic 初始迁移、Repository 实现
 - WS-1.3 Provider：openai 兼容（DeepSeek）适配 + `FakeChatModel` 测试替身
 - WS-1.4 Agent 引擎：LangGraph 单图（agent ↔ tools 循环）+ LangChain 工具
