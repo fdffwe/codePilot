@@ -11,6 +11,7 @@ from pathlib import Path
 
 from codepilot.core.errors import DomainError, NotFoundError, PermissionDeniedError
 from codepilot.core.paths import ensure_allowed, ensure_within
+from codepilot.domain.entities import WorkspaceEntry
 
 
 class LocalDirectWorkspace:
@@ -60,3 +61,23 @@ class LocalDirectWorkspace:
             return sorted(entry.name for entry in target.iterdir())
         except OSError as exc:
             raise DomainError(f"列目录失败：{target}") from exc
+
+    async def list_entries(self, path: str = ".") -> list[WorkspaceEntry]:
+        target = self.resolve(path)
+        if not target.is_dir():
+            raise NotFoundError(f"目录不存在：{target}")
+        base = Path(path)
+        try:
+            entries = [
+                WorkspaceEntry(
+                    name=entry.name,
+                    path=(base / entry.name).as_posix(),
+                    is_dir=entry.is_dir(),
+                )
+                for entry in target.iterdir()
+            ]
+        except OSError as exc:
+            raise DomainError(f"列目录失败：{target}") from exc
+        # 目录优先，其次按名称（忽略大小写）排序
+        entries.sort(key=lambda e: (not e.is_dir, e.name.casefold()))
+        return entries

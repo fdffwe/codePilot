@@ -52,6 +52,15 @@ class Session:
     created_at: datetime | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class WorkspaceEntry:
+    """工作区目录中的一个条目（用于文件树展示）。"""
+
+    name: str
+    path: str  # 工作区相对路径，POSIX 分隔符
+    is_dir: bool
+
+
 @dataclass(slots=True)
 class Approval:
     """待确认的写/执行操作。"""

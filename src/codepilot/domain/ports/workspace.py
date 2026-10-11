@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from codepilot.domain.entities import WorkspaceEntry
+
 
 @runtime_checkable
 class WorkspaceProvider(Protocol):
@@ -23,3 +25,5 @@ class WorkspaceProvider(Protocol):
     async def write_text(self, path: str, content: str) -> None: ...
 
     async def list_dir(self, path: str = ".") -> list[str]: ...
+
+    async def list_entries(self, path: str = ".") -> list[WorkspaceEntry]: ...
