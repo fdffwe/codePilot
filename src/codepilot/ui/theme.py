@@ -125,6 +125,7 @@ def build_stylesheet() -> str:
     /* --- 对话区 --- */
     #Transcript {{ background: transparent; border: none; }}
     #TranscriptWidget {{ background: transparent; }}
+    #EmptyHint {{ color: {MUTED}; font-size: 15px; padding: 0 40px; }}
 
     #BubbleUser {{
         background: {PRIMARY};

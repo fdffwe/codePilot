@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QPushButton,
     QScrollArea,
@@ -37,6 +38,14 @@ class ChatView(QWidget):
         self._messages = QVBoxLayout(self._container)
         self._messages.setContentsMargins(18, 16, 18, 16)
         self._messages.setSpacing(12)
+        self._messages.addStretch(1)  # 前导 stretch，有消息后移除
+        self._hint: QLabel | None = QLabel(
+            "选择左侧会话，或点「＋ 新建会话」绑定一个工作目录开始", self._container
+        )
+        self._hint.setObjectName("EmptyHint")
+        self._hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._hint.setWordWrap(True)
+        self._messages.addWidget(self._hint)
         self._messages.addStretch(1)
         self._scroll.setWidget(self._container)
         layout.addWidget(self._scroll, 1)
@@ -60,6 +69,7 @@ class ChatView(QWidget):
     # --- 对外槽 ---
 
     def add_message(self, who: str, text: str) -> None:
+        self._clear_empty_state()
         bubble = MessageBubble(who, text, self._container)
         wrapper = QWidget(self._container)
         row = QHBoxLayout(wrapper)
@@ -78,6 +88,16 @@ class ChatView(QWidget):
         self._input.setEnabled(not busy)
 
     # --- 内部 ---
+
+    def _clear_empty_state(self) -> None:
+        if self._hint is None:
+            return
+        # removeWidget 只解除布局管理，控件仍可见，必须显式脱离父级
+        self._messages.removeWidget(self._hint)
+        self._hint.setParent(None)
+        self._hint.deleteLater()
+        self._hint = None
+        self._messages.takeAt(0)  # 移除前导 stretch，消息改为顶部对齐
 
     def _emit_send(self) -> None:
         text = self._input.text()

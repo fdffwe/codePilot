@@ -37,6 +37,8 @@ class _RootFrame(QWidget):
         self._window = window
         self.setObjectName("Root")
         self.setMouseTracking(True)
+        # QWidget 子类默认不绘制 QSS 背景，显式开启才会画出米白底与圆角
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         self._window.handle_root_press(event)
@@ -93,6 +95,7 @@ class MainWindow(QMainWindow):
         content.addWidget(self._sidebar, 0)
 
         self._file_tree = FileTreePanel(self._root)
+        self._file_tree.setVisible(False)  # 打开会话后再显示
         content.addWidget(self._file_tree, 0)
 
         content.addWidget(self._build_conversation(), 1)
@@ -186,6 +189,7 @@ class MainWindow(QMainWindow):
 
     def _on_session_clicked(self, session: Session) -> None:
         self._vm.open_session(session)
+        self._file_tree.setVisible(True)
         self._file_tree.reset(session.title)
         self._append("系统", f"已打开会话：{session.title}（{session.workspace_path}）")
 

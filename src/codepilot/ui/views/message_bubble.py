@@ -56,6 +56,8 @@ class MessageBubble(QWidget):
         super().__init__(parent)
         self.setObjectName(_BUBBLE_BY_WHO.get(who, "BubbleAssistant"))
         self.setMaximumWidth(760)
+        # QWidget 子类默认不绘制 QSS 背景，需显式开启气泡底色与圆角
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 10, 14, 10)
