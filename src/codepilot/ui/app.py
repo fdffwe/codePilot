@@ -22,8 +22,13 @@ from codepilot.ui.viewmodels import ChatViewModel
 
 
 async def _bootstrap(settings: Settings, app: QApplication) -> None:
-    """在已运行的合并循环里构建容器并显示窗口，直到应用退出。"""
+    """在已运行的合并循环里构建容器并显示窗口，直到窗口关闭。
+
+    关闭窗口时不立刻让 Qt 退出：先跑完容器清理（异步），再显式 ``app.quit()``，
+    避免 Qt 事件循环在异步清理完成前停止，导致 ``run_until_complete`` 抛错。
+    """
     log = get_logger(__name__)
+    app.setQuitOnLastWindowClosed(False)
     try:
         async with build_container(settings) as container:
             bridge = EventBridge(container.bus)
@@ -34,19 +39,21 @@ async def _bootstrap(settings: Settings, app: QApplication) -> None:
                 "app_started", data_dir=str(settings.data_dir), model=settings.llm_model
             )
 
-            done: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+            closed: asyncio.Future[None] = asyncio.get_running_loop().create_future()
 
-            def _on_quit() -> None:
-                if not done.done():
-                    done.set_result(None)
+            def _on_closed() -> None:
+                if not closed.done():
+                    closed.set_result(None)
 
-            app.aboutToQuit.connect(_on_quit)
-            await done
-            log.info("app_stopped")
+            window.closed.connect(_on_closed)
+            await closed
     except Exception as exc:  # 组合根失败（如缺 API Key / 迁移失败）
         log.exception("bootstrap_failed")
         QMessageBox.critical(None, "启动失败", str(exc))
         app.quit()
+        return
+    log.info("app_stopped")
+    app.quit()
 
 
 def run() -> int:

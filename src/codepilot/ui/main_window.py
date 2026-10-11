@@ -5,8 +5,8 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, Qt
-from PySide6.QtGui import QMouseEvent
+from PySide6.QtCore import QPoint, Qt, Signal
+from PySide6.QtGui import QCloseEvent, QMouseEvent
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -46,6 +46,8 @@ class _RootFrame(QWidget):
 
 
 class MainWindow(QMainWindow):
+    closed = Signal()
+
     def __init__(
         self,
         settings: Settings,
@@ -218,6 +220,10 @@ class MainWindow(QMainWindow):
 
     def _append(self, who: str, text: str) -> None:
         self._chat.add_message(who, text)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        super().closeEvent(event)
+        self.closed.emit()
 
     # --- 无边框窗口：拖动/缩放 ---
 
