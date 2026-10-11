@@ -11,7 +11,7 @@ import pytest
 from codepilot.application.chat_service import ChatService
 from codepilot.application.event_bus import EventBus
 from codepilot.application.events import RunStarted
-from codepilot.core.errors import NotFoundError, PermissionDeniedError
+from codepilot.core.errors import DomainError, NotFoundError, PermissionDeniedError
 from codepilot.domain.entities import Approval, Message, Session, ToolCall
 from codepilot.domain.enums import MessageRole
 from codepilot.domain.events import (
@@ -203,3 +203,34 @@ async def test_resolve_unknown_approval_raises(tmp_path: Path) -> None:
     service, _, _, _ = _service(FakeOrchestrator([], []), allowlist=[tmp_path])
     with pytest.raises(NotFoundError):
         await service.resolve_approval("nope", approved=True)
+
+
+async def test_workspace_listing_and_reading_via_factory(tmp_path: Path) -> None:
+    from codepilot.infrastructure.workspace import LocalDirectWorkspace
+
+    def factory(path: str) -> LocalDirectWorkspace:
+        return LocalDirectWorkspace(path, allowlist=[tmp_path])
+
+    service = ChatService(
+        sessions=InMemorySessions(),
+        messages=InMemoryMessages(),
+        approvals=InMemoryApprovals(),
+        orchestrator=FakeOrchestrator([], []),
+        bus=EventBus(),
+        allowlist=[tmp_path],
+        default_model="fake",
+        workspace_factory=factory,
+    )
+    session = await service.create_session(workspace_path=tmp_path)
+    await factory(str(tmp_path)).write_text("a.txt", "hello")
+
+    entries = await service.list_workspace_entries(session.id)
+    assert [(e.name, e.is_dir) for e in entries] == [("a.txt", False)]
+    assert await service.read_workspace_file(session.id, "a.txt") == "hello"
+
+
+async def test_workspace_methods_require_factory(tmp_path: Path) -> None:
+    service, _, _, _ = _service(FakeOrchestrator([], []), allowlist=[tmp_path])
+    session = await service.create_session(workspace_path=tmp_path)
+    with pytest.raises(DomainError):
+        await service.list_workspace_entries(session.id)
