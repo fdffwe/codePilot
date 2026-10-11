@@ -6,6 +6,7 @@ DB 路径来自 Settings；SQLite 用 batch 模式以支持 ALTER。见规范 §
 from __future__ import annotations
 
 import asyncio
+import logging
 from logging.config import fileConfig
 
 from alembic import context
@@ -19,7 +20,8 @@ from codepilot.infrastructure.db.orm.base import Base
 
 config = context.config
 
-if config.config_file_name is not None:
+# 应用已自行配置日志时不覆盖宿主 logging（避免清掉 structlog 的 handler）
+if config.config_file_name is not None and not logging.getLogger().handlers:
     fileConfig(config.config_file_name)
 
 config.set_main_option(
