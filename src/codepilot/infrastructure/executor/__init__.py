@@ -1,1 +1,5 @@
-"""本机命令执行器实现（LocalExecutor）。P1 起填充。"""
+"""本机命令执行器实现。"""
+
+from codepilot.infrastructure.executor.local_executor import LocalExecutor
+
+__all__ = ["LocalExecutor"]
