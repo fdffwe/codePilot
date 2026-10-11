@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import Any
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.language_models.fake_chat_models import (
@@ -14,9 +15,16 @@ from langchain_core.language_models.fake_chat_models import (
 from langchain_core.messages import AIMessage
 
 
+class _ToolTolerantFakeModel(FakeMessagesListChatModel):
+    """脚本已含 tool_calls，忽略工具绑定请求。"""
+
+    def bind_tools(self, *args: Any, **kwargs: Any) -> BaseChatModel:
+        return self
+
+
 class FakeChatModelFactory:
     def __init__(self, responses: Iterable[AIMessage]) -> None:
         self._responses = list(responses)
 
     def __call__(self, model: str) -> BaseChatModel:
-        return FakeMessagesListChatModel(responses=list(self._responses))
+        return _ToolTolerantFakeModel(responses=list(self._responses))

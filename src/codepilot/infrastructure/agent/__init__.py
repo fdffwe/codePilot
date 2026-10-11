@@ -4,3 +4,7 @@
    上层只能通过 domain.ports.AgentOrchestrator 使用。
    见 docs/DEVELOPMENT_GUIDELINES.md §10。
 """
+
+from codepilot.infrastructure.agent.orchestrator import LangGraphOrchestrator
+
+__all__ = ["LangGraphOrchestrator"]

@@ -50,6 +50,10 @@ class Settings(BaseSettings):
         return self.data_dir / "logs"
 
     @property
+    def checkpoints_path(self) -> Path:
+        return self.data_dir / "checkpoints.sqlite"
+
+    @property
     def backups_dir(self) -> Path:
         return self.data_dir / "backups"
 
