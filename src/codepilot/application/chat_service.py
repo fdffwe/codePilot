@@ -5,15 +5,15 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Callable, Iterable
 from pathlib import Path
 from uuid import uuid4
 
 from codepilot.application.event_bus import EventBus
 from codepilot.application.events import RunStarted, SessionCreated
-from codepilot.core.errors import NotFoundError
+from codepilot.core.errors import DomainError, NotFoundError
 from codepilot.core.paths import ensure_allowed
-from codepilot.domain.entities import Message, Session
+from codepilot.domain.entities import Message, Session, WorkspaceEntry
 from codepilot.domain.enums import MessageRole
 from codepilot.domain.events import (
     AgentEvent,
@@ -26,6 +26,7 @@ from codepilot.domain.ports import (
     ApprovalRepository,
     MessageRepository,
     SessionRepository,
+    WorkspaceProvider,
 )
 
 
@@ -40,6 +41,7 @@ class ChatService:
         bus: EventBus,
         allowlist: Iterable[str | Path],
         default_model: str,
+        workspace_factory: Callable[[str], WorkspaceProvider] | None = None,
     ) -> None:
         self._sessions = sessions
         self._messages = messages
@@ -48,6 +50,7 @@ class ChatService:
         self._bus = bus
         self._allowlist = list(allowlist)
         self._default_model = default_model
+        self._workspace_factory = workspace_factory
 
     async def list_sessions(self) -> list[Session]:
         return await self._sessions.list()
@@ -97,7 +100,24 @@ class ChatService:
         events = self._orchestrator.resume(approval.run_id, approved=approved)
         await self._drive(events, session)
 
+    async def list_workspace_entries(
+        self, session_id: str, path: str = "."
+    ) -> list[WorkspaceEntry]:
+        """列出会话工作区内某一目录的条目（供文件树）。"""
+        workspace = self._workspace_for(await self._require_session(session_id))
+        return await workspace.list_entries(path)
+
+    async def read_workspace_file(self, session_id: str, path: str) -> str:
+        """读取会话工作区内的文件内容（供预览）。"""
+        workspace = self._workspace_for(await self._require_session(session_id))
+        return await workspace.read_text(path)
+
     # --- 内部 ---
+
+    def _workspace_for(self, session: Session) -> WorkspaceProvider:
+        if self._workspace_factory is None:
+            raise DomainError("工作区不可用：未注入 workspace_factory")
+        return self._workspace_factory(session.workspace_path)
 
     async def _require_session(self, session_id: str) -> Session:
         session = await self._sessions.get(session_id)
