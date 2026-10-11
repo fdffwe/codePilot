@@ -21,6 +21,8 @@ class ChatViewModel(QObject):
     sessionOpened = Signal(object)  # Session
     errorOccurred = Signal(str)
     busyChanged = Signal(bool)
+    workspaceEntriesLoaded = Signal(str, list)  # path, list[WorkspaceEntry]
+    workspaceFileLoaded = Signal(str, str)  # path, content
 
     def __init__(self, service: ChatService) -> None:
         super().__init__()
@@ -58,6 +60,16 @@ class ChatViewModel(QObject):
     def resolve_approval(self, approval_id: str, approved: bool) -> None:
         self._spawn(self._resolve(approval_id, approved))
 
+    def list_workspace_dir(self, path: str = ".") -> None:
+        if self._current is None:
+            return
+        self._spawn(self._list_workspace_dir(path))
+
+    def read_workspace_file(self, path: str) -> None:
+        if self._current is None:
+            return
+        self._spawn(self._read_workspace_file(path))
+
     # --- 异步实现 ---
 
     async def _load_sessions(self) -> None:
@@ -91,3 +103,21 @@ class ChatViewModel(QObject):
             self.errorOccurred.emit(str(exc))
         finally:
             self.busyChanged.emit(False)
+
+    async def _list_workspace_dir(self, path: str) -> None:
+        assert self._current is not None
+        try:
+            entries = await self._service.list_workspace_entries(self._current.id, path)
+        except DomainError as exc:
+            self.errorOccurred.emit(str(exc))
+            return
+        self.workspaceEntriesLoaded.emit(path, entries)
+
+    async def _read_workspace_file(self, path: str) -> None:
+        assert self._current is not None
+        try:
+            content = await self._service.read_workspace_file(self._current.id, path)
+        except DomainError as exc:
+            self.errorOccurred.emit(str(exc))
+            return
+        self.workspaceFileLoaded.emit(path, content)
