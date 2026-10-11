@@ -1,1 +1,5 @@
-"""本地直连工作区实现（LocalDirectWorkspace）。P1 起填充。"""
+"""工作区实现。"""
+
+from codepilot.infrastructure.workspace.local_workspace import LocalDirectWorkspace
+
+__all__ = ["LocalDirectWorkspace"]
