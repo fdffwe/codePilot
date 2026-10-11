@@ -64,8 +64,8 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S101"]  # 测试里允许 assert（如启用 flake8-bandit 时）
-# Qt 信号按 Qt 惯例用 camelCase，与 Python 命名风格冲突，豁免
-"src/codepilot/ui/**" = ["N815"]
+# Qt 信号/事件处理器按 Qt 惯例使用 camelCase，与 Python 命名风格冲突，豁免
+"src/codepilot/ui/**" = ["N815", "N802"]
 
 # ---------------------------------------------------------------------------
 # Black（格式化）

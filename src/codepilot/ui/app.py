@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from codepilot.core.config import Settings, get_settings
 from codepilot.core.di import build_container
 from codepilot.core.logging import configure_logging, get_logger
+from codepilot.ui import theme
 from codepilot.ui.bridge import EventBridge
 from codepilot.ui.main_window import MainWindow
 from codepilot.ui.viewmodels import ChatViewModel
@@ -56,6 +57,7 @@ def run() -> int:
 
     app = QApplication(sys.argv)
     app.setApplicationName(settings.app_name)
+    theme.apply_theme(app)
 
     # 将 asyncio 事件循环与 Qt 事件循环合并
     loop = qasync.QEventLoop(app)
