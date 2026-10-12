@@ -17,6 +17,7 @@ from codepilot.core.di import build_container
 from codepilot.core.logging import configure_logging, get_logger
 from codepilot.ui import theme
 from codepilot.ui.bridge import EventBridge
+from codepilot.ui.input_method import configure_input_method
 from codepilot.ui.main_window import MainWindow
 from codepilot.ui.viewmodels import ChatViewModel
 
@@ -58,6 +59,8 @@ async def _bootstrap(settings: Settings, app: QApplication) -> None:
 
 def run() -> int:
     """启动桌面应用，返回退出码。"""
+    # 必须在 QApplication 之前决定 QPA 平台与输入法模块
+    configure_input_method()
     settings = get_settings()
     settings.ensure_dirs()
     configure_logging(settings.log_level, log_dir=settings.logs_dir)
