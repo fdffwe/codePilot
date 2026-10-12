@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     # --- LLM（P1 起启用；此处先声明契约）---
     llm_provider: str = "openai"
     llm_base_url: str = "https://api.deepseek.com"
-    llm_model: str = "deepseek-v4-flash"
+    llm_model: str = "deepseek-chat"
     llm_api_key: SecretStr | None = None
 
     # --- 执行与编排 ---

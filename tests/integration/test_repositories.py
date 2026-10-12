@@ -51,7 +51,7 @@ def _session(sid: str = "s1") -> Session:
         id=sid,
         title="demo",
         workspace_path="/tmp/ws",
-        model="deepseek-v4-flash",
+        model="deepseek-chat",
     )
 
 

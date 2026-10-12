@@ -18,7 +18,7 @@ qasync + Qt 空窗口、打包配置）已完成。
 | GUI | PySide6（Qt）+ qasync |
 | Agent | LangChain（基础）+ LangGraph（编排） |
 | 持久化 | SQLite + SQLAlchemy 2.0 + Alembic |
-| 模型 | 默认 deepseek-v4-flash（OpenAI 兼容），可切换 |
+| 模型 | 默认 deepseek-chat（OpenAI 兼容），可切换 |
 | 打包 | PyInstaller |
 
 ## 快速开始

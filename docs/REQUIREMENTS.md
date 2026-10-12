@@ -3,7 +3,7 @@
 > 版本：v0.3
 > 日期：2026-10-11
 > 定位：一个轻量级的「Claude Code 平替」——**本地原生桌面应用**，用自然语言驱动 AI 完成编码、调试与项目构建，直接操作本机真实代码。
-> 技术基调：Python + **PySide6（原生桌面 GUI）** / **SQLite（嵌入式持久化）** / deepseek-v4-flash（默认模型） / Agent 用 LangChain + LangGraph
+> 技术基调：Python + **PySide6（原生桌面 GUI）** / **SQLite（嵌入式持久化）** / deepseek-chat（默认模型） / Agent 用 LangChain + LangGraph
 
 ---
 
@@ -17,7 +17,7 @@ Claude Code 是终端里的 AI 编码助手，能力强但门槛偏高（终端�
 - 能**执行命令**（跑测试、构建）并根据结果自我修正，实现基本 **Debug** 能力。
 - 能根据描述**从零生成一个小项目的骨架**。
 - 所有**写/改/执行操作需人工确认**，安全可控。
-- 底层模型**可配置**，v1 默认对接 **deepseek-v4-flash**（走 OpenAI 兼容接口），并保留 Claude / 本地模型（Ollama/vLLM）的适配位。
+- 底层模型**可配置**，v1 默认对接 **deepseek-chat**（走 OpenAI 兼容接口），并保留 Claude / 本地模型（Ollama/vLLM）的适配位。
 - **纯本地、单用户**：作为一个桌面应用安装运行，不需要浏览器、不需要服务器。
 
 ### 1.3 非目标
@@ -81,7 +81,7 @@ Claude Code 是终端里的 AI 编码助手，能力强但门槛偏高（终端�
 
 ### 3.6 模型配置（FR-MODEL）
 - FR-MODEL-1：抽象统一的 **Provider 接口**，屏蔽不同厂商差异。
-- FR-MODEL-2：**v1 默认对接 `deepseek-v4-flash`**（OpenAI 兼容接口）；架构上预留 Anthropic Claude 与本地模型（Ollama/vLLM）的适配位。
+- FR-MODEL-2：**v1 默认对接 `deepseek-chat`**（OpenAI 兼容接口）；架构上预留 Anthropic Claude 与本地模型（Ollama/vLLM）的适配位。
 - FR-MODEL-3：配置项包括：`base_url`、`api_key`、`model`、`max_tokens`、`temperature`，通过配置文件 / 环境变量设置。
 - FR-MODEL-4：支持**工具调用（function calling / tool use）**；对不支持 tool use 的模型提供降级方案（如基于 JSON 约定的文本协议解析）。
 - FR-MODEL-5：界面上可查看当前使用的模型，v1 允许在设置页切换。
@@ -240,7 +240,7 @@ CREATE INDEX idx_messages_session ON messages(session_id, id);
 | GUI | **PySide6（Qt）+ qasync** | 原生桌面、跨平台；qasync 统一 asyncio 与 Qt 事件循环 |
 | Agent | **LangChain（基础）+ LangGraph（编排）** | 状态图、多智能体、checkpoint、HITL、流式 |
 | 持久化 | **SQLite + SQLAlchemy 2.0 + Alembic** | 嵌入式、零配置、随 App 分发 |
-| 模型 | **openai SDK（默认 deepseek-v4-flash）** + anthropic SDK（预留） | Provider 层封装统一协议 |
+| 模型 | **openai SDK（默认 deepseek-chat）** + anthropic SDK（预留） | Provider 层封装统一协议 |
 | 命令执行 | 标准库 `asyncio.create_subprocess_exec` | 本机执行，无 shell |
 | 配置 | pydantic-settings + 本地配置文件 | 文件/环境变量优先 |
 | 测试 | pytest / pytest-asyncio / pytest-qt | 单测/集成/GUI |
@@ -275,7 +275,7 @@ CREATE INDEX idx_messages_session ON messages(session_id, id);
 
 1. 交互形态：**原生桌面 GUI（PySide6/Qt）**，非浏览器。
 2. 持久化：**嵌入式 SQLite**（随 App 分发）。
-3. 默认模型：**deepseek-v4-flash**（OpenAI 兼容接口）；预留多后端适配位。
+3. 默认模型：**deepseek-chat**（OpenAI 兼容接口）；预留多后端适配位。
 4. 工作区：**本地直连**——会话绑定用户本机已有目录，直接读写真实文件。
 5. 命令输出：**按需流式**（长命令实时推送日志到终端视图）。
 6. **仅本地运行**：单用户、单机桌面应用、无云端/多租户/浏览器形态。

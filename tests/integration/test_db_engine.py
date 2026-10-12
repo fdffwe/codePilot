@@ -27,7 +27,7 @@ async def test_engine_creates_schema_and_persists(tmp_path: Path) -> None:
                     id="s1",
                     title="demo",
                     workspace_path="/tmp/ws",
-                    model="deepseek-v4-flash",
+                    model="deepseek-chat",
                 )
             )
             await session.commit()

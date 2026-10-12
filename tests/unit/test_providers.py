@@ -17,10 +17,10 @@ def test_openai_factory_builds_chatopenai_with_model() -> None:
     factory = OpenAIChatModelFactory(
         base_url="https://api.deepseek.com", api_key=SecretStr("sk-test")
     )
-    model = factory("deepseek-v4-flash")
+    model = factory("deepseek-chat")
     assert isinstance(model, ChatOpenAI)
     name = getattr(model, "model_name", None) or model.model
-    assert name == "deepseek-v4-flash"
+    assert name == "deepseek-chat"
 
 
 async def test_fake_factory_returns_scripted_message() -> None:
