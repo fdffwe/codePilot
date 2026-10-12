@@ -228,6 +228,9 @@ async def test_workspace_listing_and_reading_via_factory(tmp_path: Path) -> None
     assert [(e.name, e.is_dir) for e in entries] == [("a.txt", False)]
     assert await service.read_workspace_file(session.id, "a.txt") == "hello"
 
+    await service.write_workspace_file(session.id, "a.txt", "改动")
+    assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "改动"
+
 
 async def test_workspace_methods_require_factory(tmp_path: Path) -> None:
     service, _, _, _ = _service(FakeOrchestrator([], []), allowlist=[tmp_path])

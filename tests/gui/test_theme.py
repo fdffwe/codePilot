@@ -15,6 +15,9 @@ def test_stylesheet_contains_palette() -> None:
     assert theme.PRIMARY in qss
     assert "border-radius" in qss
     assert "#Root" in qss
+    assert "#ActivityBar" in qss
+    assert "#CodeEditor" in qss
+    assert "#MainTabs" in qss
 
 
 def test_apply_theme_sets_stylesheet(qapp: QApplication) -> None:

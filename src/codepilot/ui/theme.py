@@ -63,7 +63,7 @@ def build_stylesheet() -> str:
     #WinClose:hover {{ background: {DANGER}; color: #FFFFFF; }}
 
     /* --- 侧栏 --- */
-    #Sidebar {{ background: transparent; }}
+    #Sidebar {{ background: #F3EFE8; }}
     #SidebarTitle {{ color: {MUTED}; font-size: 12px; font-weight: 600; }}
 
     #Sessions {{
@@ -162,9 +162,8 @@ def build_stylesheet() -> str:
 
     /* --- 文件树 --- */
     #FileTree {{
-        background: {CARD};
-        border: 1px solid {BORDER};
-        border-radius: {RADIUS_SM}px;
+        background: transparent;
+        border: none;
         outline: none;
     }}
     #FileTree::item {{ padding: 4px 2px; border-radius: 6px; color: {TEXT}; }}
@@ -184,6 +183,46 @@ def build_stylesheet() -> str:
         border-radius: 6px;
         font-family: {_MONO};
         font-size: 13px;
+    }}
+
+    /* --- 活动栏 --- */
+    #ActivityBar {{
+        background: #F1ECE4;
+        border-right: 1px solid {BORDER};
+    }}
+    #ActivityButton {{
+        background: transparent;
+        border: none;
+        border-radius: {RADIUS_SM}px;
+        color: {MUTED};
+        font-size: 18px;
+        min-width: 40px;
+        min-height: 40px;
+    }}
+    #ActivityButton:hover {{ background: {PRIMARY_SOFT}; color: {TEXT}; }}
+    #ActivityButton:checked {{ background: {PRIMARY_SOFT}; color: {PRIMARY}; }}
+
+    /* --- 主区标签页 --- */
+    #MainTabs::pane {{ border: none; background: transparent; }}
+    #MainTabs QTabBar::tab {{
+        background: transparent;
+        color: {MUTED};
+        padding: 6px 14px;
+        margin-right: 2px;
+        border-top-left-radius: 8px;
+        border-top-right-radius: 8px;
+    }}
+    #MainTabs QTabBar::tab:selected {{ background: {CARD}; color: {TEXT}; }}
+    #MainTabs QTabBar::tab:hover:!selected {{ color: {TEXT}; }}
+
+    /* --- 代码编辑器 --- */
+    #CodeEditor {{
+        background: {CARD};
+        color: {TEXT};
+        border: none;
+        padding: 6px 8px;
+        selection-background-color: {PRIMARY};
+        selection-color: #FFFFFF;
     }}
 
     /* --- 滚动条 --- */

@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QPushButton,
+    QStackedWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -24,9 +25,20 @@ from codepilot.core.config import Settings
 from codepilot.domain.entities import Approval, Session
 from codepilot.ui.bridge import EventBridge
 from codepilot.ui.viewmodels import ChatViewModel
-from codepilot.ui.views import ChatView, FileTreePanel, SessionSidebar, TitleBar
+from codepilot.ui.views import (
+    ActivityBar,
+    ChatView,
+    FileTreePanel,
+    MainTabs,
+    SessionSidebar,
+    TitleBar,
+)
 
 _RESIZE_MARGIN = 6
+
+
+def _apply_margins(layout: QVBoxLayout, margin: int) -> None:
+    layout.setContentsMargins(margin, margin, margin, margin)
 
 
 class _RootFrame(QWidget):
@@ -77,30 +89,37 @@ class MainWindow(QMainWindow):
         self._root = _RootFrame(self)
         self.setCentralWidget(self._root)
         outer = QVBoxLayout(self._root)
-        outer.setContentsMargins(
-            _RESIZE_MARGIN, _RESIZE_MARGIN, _RESIZE_MARGIN, _RESIZE_MARGIN
-        )
+        self._outer = outer
+        _apply_margins(outer, _RESIZE_MARGIN)
         outer.setSpacing(0)
 
-        outer.addWidget(
-            TitleBar(f"{self._settings.app_name} {__version__}", self._root)
+        self._title_bar = TitleBar(
+            f"{self._settings.app_name} {__version__}", self._root
         )
+        outer.addWidget(self._title_bar)
 
         content = QHBoxLayout()
         content.setContentsMargins(6, 0, 6, 0)
         content.setSpacing(0)
 
-        self._sidebar = SessionSidebar(self._root)
+        self._activity = ActivityBar(self._root)
+        content.addWidget(self._activity, 0)
+
+        # 中栏：会话 / 文件 两个面板，按活动栏图标切换
+        self._side_stack = QStackedWidget(self._root)
+        self._sidebar = SessionSidebar(self._side_stack)
         self._sessions = self._sidebar.sessions  # 供测试/兼容访问
-        content.addWidget(self._sidebar, 0)
+        self._file_tree = FileTreePanel(self._side_stack)
+        self._side_stack.addWidget(self._sidebar)
+        self._side_stack.addWidget(self._file_tree)
+        content.addWidget(self._side_stack, 0)
 
-        self._file_tree = FileTreePanel(self._root)
-        self._file_tree.setVisible(False)  # 打开会话后再显示
-        content.addWidget(self._file_tree, 0)
-
-        content.addWidget(self._build_conversation(), 1)
+        # 右侧主区：对话 + 文件标签页
+        self._tabs = MainTabs(self._build_conversation(), self._root)
+        content.addWidget(self._tabs, 1)
         outer.addLayout(content, 1)
 
+        self.statusBar().setSizeGripEnabled(False)
         self.statusBar().showMessage(
             f"数据目录：{self._settings.data_dir}  |  模型：{self._settings.llm_model}"
         )
@@ -151,11 +170,17 @@ class MainWindow(QMainWindow):
     # --- 连接 ---
 
     def _connect(self) -> None:
+        self._title_bar.minimizeRequested.connect(self.showMinimized)
+        self._title_bar.maximizeRequested.connect(self._toggle_maximize)
+        self._title_bar.closeRequested.connect(self.close)
         self._sidebar.createRequested.connect(self._on_new_session)
         self._sidebar.sessionActivated.connect(self._on_session_clicked)
         self._chat.sendRequested.connect(self._on_send)
         self._allow_button.clicked.connect(lambda: self._resolve(True))
         self._reject_button.clicked.connect(lambda: self._resolve(False))
+
+        self._activity.panelSelected.connect(self._side_stack.setCurrentIndex)
+        self._tabs.saveRequested.connect(self._vm.save_workspace_file)
 
         self._file_tree.directoryExpandRequested.connect(self._vm.list_workspace_dir)
         self._file_tree.fileActivated.connect(self._vm.read_workspace_file)
@@ -164,7 +189,8 @@ class MainWindow(QMainWindow):
         self._vm.errorOccurred.connect(self._on_error)
         self._vm.busyChanged.connect(self._on_busy)
         self._vm.workspaceEntriesLoaded.connect(self._file_tree.set_entries)
-        self._vm.workspaceFileLoaded.connect(self._show_file)
+        self._vm.workspaceFileLoaded.connect(self._open_file_tab)
+        self._vm.workspaceFileSaved.connect(self._tabs.mark_saved)
 
         self._bridge.messageReceived.connect(lambda t: self._append("助手", t))
         self._bridge.toolCalled.connect(
@@ -189,8 +215,10 @@ class MainWindow(QMainWindow):
 
     def _on_session_clicked(self, session: Session) -> None:
         self._vm.open_session(session)
-        self._file_tree.setVisible(True)
         self._file_tree.reset(session.title)
+        self._side_stack.setCurrentIndex(1)  # 切到文件面板
+        self._activity.set_current(1)
+        self._tabs.show_chat()
         self._append("系统", f"已打开会话：{session.title}（{session.workspace_path}）")
 
     def _on_sessions_changed(self, sessions: list[Session]) -> None:
@@ -219,8 +247,8 @@ class MainWindow(QMainWindow):
     def _on_error(self, message: str) -> None:
         self._append("错误", message)
 
-    def _show_file(self, path: str, content: str) -> None:
-        self._append("文件", f"{path}\n```\n{content}\n```")
+    def _open_file_tab(self, path: str, content: str) -> None:
+        self._tabs.open_file(path, content)
 
     def _append(self, who: str, text: str) -> None:
         self._chat.add_message(who, text)
@@ -230,6 +258,19 @@ class MainWindow(QMainWindow):
         self.closed.emit()
 
     # --- 无边框窗口：拖动/缩放 ---
+
+    def _toggle_maximize(self) -> None:
+        """最大化/还原，并切换 Root 的圆角与边距。"""
+        maximize = not self.isMaximized()
+        if maximize:
+            self.showMaximized()
+        else:
+            self.showNormal()
+        # 最大化时去掉圆角与外边距，避免露缝
+        self._root.setProperty("maximized", "true" if maximize else "false")
+        self._root.style().unpolish(self._root)
+        self._root.style().polish(self._root)
+        _apply_margins(self._outer, 0 if maximize else _RESIZE_MARGIN)
 
     def handle_root_press(self, event: QMouseEvent) -> None:
         if event.button() != Qt.MouseButton.LeftButton:

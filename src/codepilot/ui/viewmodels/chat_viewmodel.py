@@ -23,6 +23,7 @@ class ChatViewModel(QObject):
     busyChanged = Signal(bool)
     workspaceEntriesLoaded = Signal(str, list)  # path, list[WorkspaceEntry]
     workspaceFileLoaded = Signal(str, str)  # path, content
+    workspaceFileSaved = Signal(str)  # path
 
     def __init__(self, service: ChatService) -> None:
         super().__init__()
@@ -69,6 +70,11 @@ class ChatViewModel(QObject):
         if self._current is None:
             return
         self._spawn(self._read_workspace_file(path))
+
+    def save_workspace_file(self, path: str, content: str) -> None:
+        if self._current is None:
+            return
+        self._spawn(self._save_workspace_file(path, content))
 
     # --- 异步实现 ---
 
@@ -121,3 +127,12 @@ class ChatViewModel(QObject):
             self.errorOccurred.emit(str(exc))
             return
         self.workspaceFileLoaded.emit(path, content)
+
+    async def _save_workspace_file(self, path: str, content: str) -> None:
+        assert self._current is not None
+        try:
+            await self._service.write_workspace_file(self._current.id, path, content)
+        except DomainError as exc:
+            self.errorOccurred.emit(str(exc))
+            return
+        self.workspaceFileSaved.emit(path)

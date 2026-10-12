@@ -112,6 +112,13 @@ class ChatService:
         workspace = self._workspace_for(await self._require_session(session_id))
         return await workspace.read_text(path)
 
+    async def write_workspace_file(
+        self, session_id: str, path: str, content: str
+    ) -> None:
+        """把编辑后的内容写回会话工作区内的文件。"""
+        workspace = self._workspace_for(await self._require_session(session_id))
+        await workspace.write_text(path, content)
+
     # --- 内部 ---
 
     def _workspace_for(self, session: Session) -> WorkspaceProvider:
