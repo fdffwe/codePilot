@@ -30,7 +30,7 @@ from codepilot.domain.ports import Executor, WorkspaceProvider
 from codepilot.infrastructure.agent.graph import build_graph
 from codepilot.infrastructure.agent.mappers import from_ai_message, to_lc_message
 from codepilot.infrastructure.agent.state import AgentState
-from codepilot.infrastructure.agent.tools import RunDeps, tool_schemas
+from codepilot.infrastructure.agent.tools import TOOLS, RunDeps
 from codepilot.infrastructure.providers import ChatModelFactory
 
 _log = logging.getLogger(__name__)
@@ -110,13 +110,12 @@ class LangGraphOrchestrator:
 
     def _make_deps(self, model: str, workspace_path: str) -> RunDeps:
         workspace = self._workspace_factory(workspace_path)
-        bound = self._model_factory(model).bind_tools(tool_schemas())
+        bound = self._model_factory(model).bind_tools(TOOLS)
         return RunDeps(
             workspace=workspace,
             executor=self._executor,
             model=bound,
             command_timeout_s=self._command_timeout_s,
-            max_iterations=self._max_iterations,
         )
 
     def _prepare_input(self, messages: Sequence[Message]) -> list[AnyMessage]:

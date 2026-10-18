@@ -148,3 +148,27 @@ async def test_iteration_cap_stops_loop(tmp_path: Path) -> None:
     ]
     assert isinstance(events[-1], RunFinishedEvent)
     assert events[-1].iterations <= 2
+
+
+async def test_invalid_tool_args_do_not_abort_run(tmp_path: Path) -> None:
+    # 参数校验失败应回传 error 结果让模型自纠，而非终止整个 run（P4）
+    orch = _orchestrator(
+        [
+            _tool_call("read_file", {}, "c1"),  # 缺 path
+            AIMessage(content="参数不对"),
+        ],
+        tmp_path,
+    )
+    events = [
+        ev
+        async for ev in orch.stream(
+            run_id="r5",
+            session_id="s1",
+            model="fake",
+            messages=[_user("读文件")],
+            workspace_path=str(tmp_path),
+        )
+    ]
+    result = next(e for e in events if isinstance(e, ToolResultEvent))
+    assert not result.ok
+    assert isinstance(events[-1], RunFinishedEvent)

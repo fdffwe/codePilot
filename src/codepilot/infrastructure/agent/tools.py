@@ -1,32 +1,50 @@
 """Agent 工具集：读写/列目录/执行命令。
 
-工具函数体不直接碰文件/命令，一律经 Workspace/Executor 端口（规范 §10）。
-每个工具带 safety 元数据；非只读工具在执行前需人工确认。
+工具以 LangChain ``StructuredTool`` 定义，schema 由 ``args_schema`` 自动生成；
+``safety`` / ``risk`` / ``preview`` 等元数据挂在 ``tool.metadata`` 上（非只读工具
+在执行前需人工确认）。工具函数体不直接碰文件/命令，一律经 Workspace/Executor
+端口（规范 §10）；一次 run 的运行时依赖经 ``config`` 注入，不进 checkpoint。
 """
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Annotated, Any, cast
 
-from langchain_core.runnables import Runnable
-from pydantic import BaseModel, Field
+from langchain_core.runnables import Runnable, RunnableConfig
+from langchain_core.tools import InjectedToolArg, StructuredTool
+from pydantic import BaseModel, Field, ValidationError
 
 from codepilot.domain.enums import ToolSafety
 from codepilot.domain.ports import Executor, WorkspaceProvider
 
+RISK_BY_SAFETY: dict[ToolSafety, str] = {
+    ToolSafety.READ: "low",
+    ToolSafety.WRITE: "medium",
+    ToolSafety.EXEC: "high",
+}
+
 
 @dataclass(slots=True)
 class RunDeps:
-    """一次 run 的运行时依赖（经 config 注入节点，不进 checkpoint 状态）。"""
+    """一次 run 的运行时依赖（经 config 注入节点与工具，不进 checkpoint 状态）。"""
 
     workspace: WorkspaceProvider
     executor: Executor
     # 已 bind_tools 的可运行体；框架边界，用 Runnable[Any, Any] 承接
     model: Runnable[Any, Any]
     command_timeout_s: float
-    max_iterations: int
+
+
+def _deps(config: RunnableConfig) -> RunDeps:
+    """从 run config 取出运行时依赖。"""
+    return cast(RunDeps, config["configurable"]["codepilot_deps"])
+
+
+def _fmt_validation_error(error: ValidationError) -> str:
+    """把参数校验失败转成可回传模型的错误文本（不中断 run）。"""
+    return f"参数校验失败：{error}"
 
 
 # --- 工具参数模型（供模型生成参数 + 校验）---
@@ -54,23 +72,32 @@ class RunCommandArgs(BaseModel):
 # --- 具体实现（经端口）---
 
 
-async def _read_file(deps: RunDeps, args: ReadFileArgs) -> str:
-    return await deps.workspace.read_text(args.path)
+async def _read_file(
+    path: str, config: Annotated[RunnableConfig, InjectedToolArg]
+) -> str:
+    return await _deps(config).workspace.read_text(path)
 
 
-async def _list_dir(deps: RunDeps, args: ListDirArgs) -> str:
-    entries = await deps.workspace.list_dir(args.path)
+async def _list_dir(
+    path: str, config: Annotated[RunnableConfig, InjectedToolArg]
+) -> str:
+    entries = await _deps(config).workspace.list_dir(path)
     return "\n".join(entries)
 
 
-async def _write_file(deps: RunDeps, args: WriteFileArgs) -> str:
-    await deps.workspace.write_text(args.path, args.content)
-    return f"已写入 {args.path}（{len(args.content)} 字符）"
+async def _write_file(
+    path: str, content: str, config: Annotated[RunnableConfig, InjectedToolArg]
+) -> str:
+    await _deps(config).workspace.write_text(path, content)
+    return f"已写入 {path}（{len(content)} 字符）"
 
 
-async def _run_command(deps: RunDeps, args: RunCommandArgs) -> str:
+async def _run_command(
+    argv: list[str], config: Annotated[RunnableConfig, InjectedToolArg]
+) -> str:
+    deps = _deps(config)
     result = await deps.executor.run(
-        args.argv, cwd=deps.workspace.root, timeout_s=deps.command_timeout_s
+        argv, cwd=deps.workspace.root, timeout_s=deps.command_timeout_s
     )
     parts = [f"exit={result.exit_code}"]
     if result.stdout:
@@ -82,33 +109,15 @@ async def _run_command(deps: RunDeps, args: RunCommandArgs) -> str:
     return "\n".join(parts)
 
 
-@dataclass(frozen=True)
-class ToolSpec:
-    name: str
-    safety: ToolSafety
-    description: str
-    args_model: type[BaseModel]
-    run: Callable[[RunDeps, Any], Awaitable[str]]
-    preview: Callable[[Any], str]
+# --- 预览渲染（进审批卡片）---
 
-    def schema(self) -> dict[str, Any]:
-        """OpenAI 工具格式（ChatOpenAI.bind_tools 可直接消费）。"""
-        return {
-            "type": "function",
-            "function": {
-                "name": self.name,
-                "description": self.description,
-                "parameters": self.args_model.model_json_schema(),
-            },
-        }
 
-    @property
-    def risk(self) -> str:
-        return {
-            ToolSafety.READ: "low",
-            ToolSafety.WRITE: "medium",
-            ToolSafety.EXEC: "high",
-        }[self.safety]
+def _read_preview(args: ReadFileArgs) -> str:
+    return f"读取 {args.path}"
+
+
+def _list_preview(args: ListDirArgs) -> str:
+    return f"列出目录 {args.path}"
 
 
 def _write_preview(args: WriteFileArgs) -> str:
@@ -119,41 +128,71 @@ def _run_preview(args: RunCommandArgs) -> str:
     return "执行命令：" + " ".join(args.argv)
 
 
-TOOL_SPECS: dict[str, ToolSpec] = {
-    "read_file": ToolSpec(
-        name="read_file",
-        safety=ToolSafety.READ,
-        description="读取工作区内某个文本文件的内容。",
-        args_model=ReadFileArgs,
-        run=_read_file,
-        preview=lambda args: f"读取 {args.path}",
-    ),
-    "list_dir": ToolSpec(
-        name="list_dir",
-        safety=ToolSafety.READ,
-        description="列出工作区内某目录下的条目名称（非递归）。",
-        args_model=ListDirArgs,
-        run=_list_dir,
-        preview=lambda args: f"列出目录 {args.path}",
-    ),
-    "write_file": ToolSpec(
-        name="write_file",
-        safety=ToolSafety.WRITE,
-        description="将内容写入工作区内的文件（覆盖写，父目录自动创建）。",
-        args_model=WriteFileArgs,
-        run=_write_file,
-        preview=_write_preview,
-    ),
-    "run_command": ToolSpec(
-        name="run_command",
-        safety=ToolSafety.EXEC,
-        description="在工作区根目录执行一条命令并返回输出。argv 逐项给出，不经 shell。",
-        args_model=RunCommandArgs,
-        run=_run_command,
-        preview=_run_preview,
-    ),
-}
+# --- 工具定义（LangChain StructuredTool）---
+
+Preview = Callable[[Any], str]
 
 
-def tool_schemas() -> list[dict[str, Any]]:
-    return [spec.schema() for spec in TOOL_SPECS.values()]
+def _make_tool(
+    *,
+    coroutine: Callable[..., Awaitable[str]],
+    name: str,
+    description: str,
+    args_schema: type[BaseModel],
+    safety: ToolSafety,
+    preview: Preview,
+) -> StructuredTool:
+    """构建工具：schema 来自 args_schema，元数据（safety/risk/preview）挂 metadata。"""
+    return StructuredTool.from_function(
+        coroutine=coroutine,
+        name=name,
+        description=description,
+        args_schema=args_schema,
+        metadata={
+            "safety": safety,
+            "risk": RISK_BY_SAFETY[safety],
+            "preview": preview,
+        },
+        handle_validation_error=_fmt_validation_error,
+    )
+
+
+read_file = _make_tool(
+    coroutine=_read_file,
+    name="read_file",
+    description="读取工作区内某个文本文件的内容。",
+    args_schema=ReadFileArgs,
+    safety=ToolSafety.READ,
+    preview=_read_preview,
+)
+
+list_dir = _make_tool(
+    coroutine=_list_dir,
+    name="list_dir",
+    description="列出工作区内某目录下的条目名称（非递归）。",
+    args_schema=ListDirArgs,
+    safety=ToolSafety.READ,
+    preview=_list_preview,
+)
+
+write_file = _make_tool(
+    coroutine=_write_file,
+    name="write_file",
+    description="将内容写入工作区内的文件（覆盖写，父目录自动创建）。",
+    args_schema=WriteFileArgs,
+    safety=ToolSafety.WRITE,
+    preview=_write_preview,
+)
+
+run_command = _make_tool(
+    coroutine=_run_command,
+    name="run_command",
+    description="在工作区根目录执行一条命令并返回输出。argv 逐项给出，不经 shell。",
+    args_schema=RunCommandArgs,
+    safety=ToolSafety.EXEC,
+    preview=_run_preview,
+)
+
+
+TOOLS: list[StructuredTool] = [read_file, list_dir, write_file, run_command]
+TOOLS_BY_NAME: dict[str, StructuredTool] = {tool.name: tool for tool in TOOLS}

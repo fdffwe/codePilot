@@ -55,3 +55,4 @@ ui ─▶ application ─▶ domain ◀─ infrastructure（实现 ports）
 - [技术设计](docs/TECHNICAL_DESIGN.md)
 - [工程规划](docs/ENGINEERING_PLAN.md)
 - [开发规范](docs/DEVELOPMENT_GUIDELINES.md)
+- [工具层分析报告](docs/TOOL_LAYER_ANALYSIS.md)
