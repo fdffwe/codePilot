@@ -25,8 +25,9 @@ class ApprovalStatus(StrEnum):
 
 
 class ToolSafety(StrEnum):
-    """工具安全等级；write/exec 需人工确认。"""
+    """工具安全等级；write/exec 需人工确认，ask 向用户提问。"""
 
     READ = "read"
     WRITE = "write"
     EXEC = "exec"
+    ASK = "ask"

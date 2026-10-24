@@ -61,6 +61,17 @@ class WorkspaceEntry:
     is_dir: bool
 
 
+@dataclass(frozen=True, slots=True)
+class Question:
+    """Agent 向用户发起的澄清提问；run 暂停等待回答。"""
+
+    id: str
+    session_id: str
+    run_id: str
+    text: str
+    options: tuple[str, ...] = ()
+
+
 @dataclass(slots=True)
 class Approval:
     """待确认的写/执行操作。"""

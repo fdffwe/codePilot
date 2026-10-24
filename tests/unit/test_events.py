@@ -6,13 +6,14 @@ import dataclasses
 
 import pytest
 
-from codepilot.domain.entities import Approval, ToolCall
+from codepilot.domain.entities import Approval, Question, ToolCall
 from codepilot.domain.enums import ApprovalStatus
 from codepilot.domain.events import (
     AgentEvent,
     ApprovalRequiredEvent,
     ErrorEvent,
     MessageEvent,
+    QuestionRequiredEvent,
     RunFinishedEvent,
     TokenEvent,
     ToolCallEvent,
@@ -57,6 +58,13 @@ def test_approval_required_event_wraps_approval() -> None:
     )
     event = ApprovalRequiredEvent(run_id="r1", seq=3, approval=approval)
     assert event.approval.status is ApprovalStatus.PENDING
+
+
+def test_question_required_event_wraps_question() -> None:
+    question = Question(id="q1", session_id="s1", run_id="r1", text="用哪个？")
+    event = QuestionRequiredEvent(run_id="r1", seq=3, question=question)
+    assert event.question is question
+    assert event.question.options == ()
 
 
 def test_run_finished_and_error_events() -> None:

@@ -6,12 +6,14 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QPoint, Qt, Signal
-from PySide6.QtGui import QCloseEvent, QMouseEvent
+from PySide6.QtGui import QCloseEvent, QMouseEvent, QResizeEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QPushButton,
     QStackedWidget,
@@ -22,7 +24,7 @@ from PySide6.QtWidgets import (
 
 from codepilot import __version__
 from codepilot.core.config import Settings
-from codepilot.domain.entities import Approval, Session
+from codepilot.domain.entities import Approval, Question, Session
 from codepilot.ui.bridge import EventBridge
 from codepilot.ui.viewmodels import ChatViewModel
 from codepilot.ui.views import (
@@ -32,6 +34,7 @@ from codepilot.ui.views import (
     MainTabs,
     SessionSidebar,
     TitleBar,
+    Toast,
 )
 
 _RESIZE_MARGIN = 6
@@ -73,6 +76,8 @@ class MainWindow(QMainWindow):
         self._vm = viewmodel
         self._bridge = bridge
         self._pending_approval: Approval | None = None
+        self._pending_question: Question | None = None
+        self._option_buttons: list[QPushButton] = []
 
         self.setWindowTitle(f"{settings.app_name} {__version__}")
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
@@ -124,6 +129,8 @@ class MainWindow(QMainWindow):
             f"数据目录：{self._settings.data_dir}  |  模型：{self._settings.llm_model}"
         )
 
+        self._toast = Toast(self._root)
+
     def _build_conversation(self) -> QWidget:
         panel = QWidget(self._root)
         layout = QVBoxLayout(panel)
@@ -133,10 +140,55 @@ class MainWindow(QMainWindow):
         self._chat = ChatView(panel)
         layout.addWidget(self._chat, 1)
 
+        self._question_box = self._build_question_box(panel)
+        self._question_box.setVisible(False)
+        layout.addWidget(self._question_box)
+
         self._approval_box = self._build_approval_box(panel)
         self._approval_box.setVisible(False)
         layout.addWidget(self._approval_box)
         return panel
+
+    def _build_question_box(self, parent: QWidget) -> QFrame:
+        box = QFrame(parent)
+        box.setObjectName("QuestionCard")
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
+
+        title = QLabel("需要你的补充", box)
+        title.setObjectName("QuestionTitle")
+        self._question_text = QLabel(box)
+        self._question_text.setObjectName("QuestionText")
+        self._question_text.setWordWrap(True)
+
+        self._question_options = QWidget(box)
+        self._question_options_layout = QHBoxLayout(self._question_options)
+        self._question_options_layout.setContentsMargins(0, 0, 0, 0)
+        self._question_options_layout.setSpacing(8)
+
+        row = QHBoxLayout()
+        self._question_input = QLineEdit(box)
+        self._question_input.setObjectName("QuestionInput")
+        self._question_input.setPlaceholderText("输入你的回答，回车提交…")
+        self._question_submit = QPushButton("提交", box)
+        self._question_submit.setObjectName("Primary")
+        self._question_submit.setCursor(Qt.CursorShape.PointingHandCursor)
+        row.addWidget(self._question_input, 1)
+        row.addWidget(self._question_submit, 0)
+
+        layout.addWidget(title)
+        layout.addWidget(self._question_text)
+        layout.addWidget(self._question_options)
+        layout.addLayout(row)
+
+        self._question_submit.clicked.connect(
+            lambda: self._submit_answer(self._question_input.text())
+        )
+        self._question_input.returnPressed.connect(
+            lambda: self._submit_answer(self._question_input.text())
+        )
+        return box
 
     def _build_approval_box(self, parent: QWidget) -> QFrame:
         box = QFrame(parent)
@@ -198,7 +250,9 @@ class MainWindow(QMainWindow):
         )
         self._bridge.toolResult.connect(self._on_tool_result)
         self._bridge.approvalRequested.connect(self._on_approval)
-        self._bridge.errorOccurred.connect(lambda m: self._append("错误", m))
+        self._bridge.questionAsked.connect(self._on_question)
+        self._bridge.runFinished.connect(self._on_run_finished)
+        self._bridge.errorOccurred.connect(self._on_agent_error)
 
     # --- 槽 ---
 
@@ -228,10 +282,57 @@ class MainWindow(QMainWindow):
         self._append("输出" if ok else "输出(失败)", output)
 
     def _on_approval(self, approval: Approval) -> None:
+        self._pending_question = None
+        self._question_box.setVisible(False)
         self._pending_approval = approval
         self._approval_label.setText(f"{approval.tool}（风险：{approval.risk}）")
         self._approval_preview.setPlainText(approval.preview)
         self._approval_box.setVisible(True)
+        self._notify("agent 已暂停", f"{approval.tool} 等待你确认")
+
+    def _on_question(self, question: Question) -> None:
+        self._pending_approval = None
+        self._approval_box.setVisible(False)
+        self._pending_question = question
+        self._question_text.setText(question.text)
+        self._set_question_options(question.options)
+        self._question_input.clear()
+        self._question_box.setVisible(True)
+        self._question_input.setFocus()
+        self._notify("agent 已暂停", "等待你回答问题")
+
+    def _set_question_options(self, options: tuple[str, ...]) -> None:
+        while self._question_options_layout.count():
+            item = self._question_options_layout.takeAt(0)
+            if item is None:
+                break
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._option_buttons = []
+        for option in options[:8]:
+            button = QPushButton(option, self._question_options)
+            button.setObjectName("Ghost")
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(
+                lambda _checked=False, text=option: self._submit_answer(text)
+            )
+            self._question_options_layout.addWidget(button)
+            self._option_buttons.append(button)
+        self._question_options_layout.addStretch(1)
+        self._question_options.setVisible(bool(options))
+
+    def _submit_answer(self, text: str) -> None:
+        question = self._pending_question
+        answer = text.strip()
+        if question is None or not answer:
+            return
+        # 先清 pending 再拉起协程，避免双击重复 resume
+        self._pending_question = None
+        self._question_box.setVisible(False)
+        self._question_input.clear()
+        self._append("我", answer)
+        self._vm.answer_question(question, answer)
 
     def _resolve(self, approved: bool) -> None:
         if self._pending_approval is None:
@@ -239,6 +340,34 @@ class MainWindow(QMainWindow):
         self._approval_box.setVisible(False)
         self._vm.resolve_approval(self._pending_approval.id, approved)
         self._pending_approval = None
+
+    def _on_run_finished(self, iterations: int) -> None:
+        self._pending_approval = None
+        self._pending_question = None
+        self._approval_box.setVisible(False)
+        self._question_box.setVisible(False)
+        self._notify("agent 已停止", f"本轮工作结束（共 {iterations} 轮）")
+
+    def _on_agent_error(self, message: str) -> None:
+        self._append("错误", message)
+        self._notify("agent 已停止", "运行出错，已终止")
+
+    def _notify(self, title: str, body: str) -> None:
+        """应用内浮层提醒；窗口不在前台时尽力置前并闪烁任务栏。"""
+        self._toast.show_message(title, body)
+        if not self.isVisible() or self.isActiveWindow():
+            return
+        if self.isMinimized():
+            self.showNormal()
+        self.raise_()
+        self.activateWindow()
+        QApplication.alert(self, 0)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        toast = getattr(self, "_toast", None)
+        if toast is not None:
+            toast.reposition()
 
     def _on_busy(self, busy: bool) -> None:
         self._chat.set_busy(busy)

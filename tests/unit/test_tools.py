@@ -13,6 +13,7 @@ from codepilot.domain.enums import ToolSafety
 from codepilot.infrastructure.agent.tools import (
     TOOLS,
     TOOLS_BY_NAME,
+    AskUserArgs,
     EditFileArgs,
     RunCommandArgs,
     RunDeps,
@@ -69,6 +70,16 @@ def test_previews_render() -> None:
 
     run = TOOLS_BY_NAME["run_command"].metadata["preview"]
     assert run(RunCommandArgs(argv=["ls", "-l"])) == "执行命令：ls -l"
+
+
+def test_ask_user_metadata_and_defaults() -> None:
+    tool = TOOLS_BY_NAME["ask_user"]
+    md = tool.metadata or {}
+    assert md["safety"] is ToolSafety.ASK
+    assert md["risk"] == "low"
+    args = AskUserArgs(question="用哪个名字？")
+    assert args.options == []
+    assert md["preview"](args) == "询问用户：用哪个名字？"
 
 
 def test_unknown_tool_not_registered() -> None:
@@ -146,6 +157,12 @@ async def test_invalid_args_return_error_message(tmp_path: Path) -> None:
     msg = await _invoke("read_file", {}, tmp_path)  # 缺 path
     assert msg.status == "error"
     assert "参数校验失败" in msg.content
+
+
+async def test_ask_user_body_never_executes(tmp_path: Path) -> None:
+    """正常路径由图节点 interrupt 接管；直接调用应显式失败。"""
+    with pytest.raises(DomainError):
+        await _invoke("ask_user", {"question": "q"}, tmp_path)
 
 
 async def test_path_escape_raises_domain_error(tmp_path: Path) -> None:

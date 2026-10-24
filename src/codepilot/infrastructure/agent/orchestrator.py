@@ -10,18 +10,20 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator, Callable, Sequence
 from typing import Any
+from uuid import uuid4
 
 from langchain_core.messages import AIMessage, AnyMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import Command, Interrupt
 
-from codepilot.domain.entities import Approval, Message, ToolCall
+from codepilot.domain.entities import Approval, Message, Question, ToolCall
 from codepilot.domain.events import (
     AgentEvent,
     ApprovalRequiredEvent,
     ErrorEvent,
     MessageEvent,
+    QuestionRequiredEvent,
     RunFinishedEvent,
     ToolCallEvent,
     ToolResultEvent,
@@ -38,6 +40,8 @@ _log = logging.getLogger(__name__)
 DEFAULT_SYSTEM_PROMPT = (
     "你是 codePilot，一个本地编码助手。你可以调用工具读取/写入/编辑工作区文件、"
     "列出目录、执行命令。修改已有文件时优先用 edit_file 做局部替换，而非整体重写。"
+    "需求不明确、缺少关键信息或存在多种合理做法时，先用 ask_user 向用户澄清，"
+    "不要臆测；用户的回答会作为该工具的结果返回。"
     "写入与执行命令需要用户确认后再进行。"
     "请先用工具了解现状，再采取行动；只操作工作区内路径。"
 )
@@ -67,6 +71,8 @@ class LangGraphOrchestrator:
         self._runs: dict[str, RunDeps] = {}
         self._session_ids: dict[str, str] = {}
         self._seq: dict[str, int] = {}
+        # run_id → 当前暂停等待的类型（approval / question），用于防止 resume 错配
+        self._pending_kind: dict[str, str] = {}
 
     async def stream(
         self,
@@ -96,18 +102,44 @@ class LangGraphOrchestrator:
             yield event
 
     async def resume(self, run_id: str, *, approved: bool) -> AsyncIterator[AgentEvent]:
+        async for event in self._resume_with(
+            run_id, approved, expected_kind="approval"
+        ):
+            yield event
+
+    async def answer(self, run_id: str, *, text: str) -> AsyncIterator[AgentEvent]:
+        async for event in self._resume_with(run_id, text, expected_kind="question"):
+            yield event
+
+    # --- 内部 ---
+
+    async def _resume_with(
+        self, run_id: str, value: bool | str, *, expected_kind: str
+    ) -> AsyncIterator[AgentEvent]:
         if run_id not in self._runs:
             yield ErrorEvent(
                 run_id=run_id, seq=self._next(run_id), message="未知的 run，无法恢复"
             )
             return
+        pending = self._pending_kind.get(run_id)
+        if pending != expected_kind:
+            # resume 按调用顺序匹配，类型错配会把 bool 当成回答喂给模型
+            waiting = {"approval": "审批", "question": "用户回答"}.get(
+                pending or "", "无"
+            )
+            expected = "审批" if expected_kind == "approval" else "用户回答"
+            yield ErrorEvent(
+                run_id=run_id,
+                seq=self._next(run_id),
+                message=f"当前等待{waiting}，不能提交{expected}",
+            )
+            return
+        self._pending_kind.pop(run_id, None)
         updates = self._graph.astream(
-            Command(resume=approved), self._config(run_id), stream_mode="updates"
+            Command(resume=value), self._config(run_id), stream_mode="updates"
         )
         async for event in self._translate(updates, run_id):
             yield event
-
-    # --- 内部 ---
 
     def _make_deps(self, model: str, workspace_path: str) -> RunDeps:
         workspace = self._workspace_factory(workspace_path)
@@ -149,12 +181,19 @@ class LangGraphOrchestrator:
                 if "__interrupt__" in update:
                     interrupted = True
                     for intr in update["__interrupt__"]:
-                        yield self._approval_event(run_id, intr)
+                        interrupt_event = self._interrupt_event(run_id, intr)
+                        self._pending_kind[run_id] = (
+                            "question"
+                            if isinstance(interrupt_event, QuestionRequiredEvent)
+                            else "approval"
+                        )
+                        yield interrupt_event
                     continue
                 for node, value in update.items():
                     for event in self._node_events(run_id, node, value, pending):
                         yield event
         except Exception as exc:
+            self._pending_kind.pop(run_id, None)
             _log.warning(
                 "agent_run_failed", extra={"run_id": run_id, "error": str(exc)}
             )
@@ -162,6 +201,7 @@ class LangGraphOrchestrator:
             return
 
         if not interrupted:
+            self._pending_kind.pop(run_id, None)
             snapshot = await self._graph.aget_state(self._config(run_id))
             if not snapshot.next:
                 yield RunFinishedEvent(
@@ -204,7 +244,8 @@ class LangGraphOrchestrator:
         elif node == "tools":
             for msg in value.get("messages", []):
                 cid = str(getattr(msg, "tool_call_id", ""))
-                name, args = pending.pop(cid, (str(getattr(msg, "name", "")), {}))
+                fallback_name = str(getattr(msg, "name", "") or "")
+                name, args = pending.pop(cid, (fallback_name, {}))
                 call = ToolCall(id=cid, name=name, arguments=args)
                 ok = getattr(msg, "status", "success") != "error"
                 events.append(
@@ -218,10 +259,29 @@ class LangGraphOrchestrator:
                 )
         return events
 
+    def _interrupt_event(
+        self, run_id: str, intr: Interrupt
+    ) -> ApprovalRequiredEvent | QuestionRequiredEvent:
+        value = intr.value if isinstance(intr.value, dict) else {}
+        if value.get("kind") == "question":
+            question = Question(
+                # interrupt id 是 namespace 哈希，同节点多次中断会重复，改用独立 id
+                id=uuid4().hex,
+                session_id=self._session_ids.get(run_id, ""),
+                run_id=run_id,
+                text=str(value.get("question", "")),
+                options=tuple(str(option) for option in value.get("options") or []),
+            )
+            return QuestionRequiredEvent(
+                run_id=run_id, seq=self._next(run_id), question=question
+            )
+        return self._approval_event(run_id, intr)
+
     def _approval_event(self, run_id: str, intr: Interrupt) -> ApprovalRequiredEvent:
         value = intr.value if isinstance(intr.value, dict) else {}
         approval = Approval(
-            id=str(intr.id),
+            # 同节点内多个 interrupt 共享 id，审批要落库，必须用唯一 id
+            id=uuid4().hex,
             session_id=self._session_ids.get(run_id, ""),
             run_id=run_id,
             tool=str(value.get("tool", "")),

@@ -1,4 +1,4 @@
-"""Agent 工具集：读写/列目录/执行命令。
+"""Agent 工具集：读写/列目录/执行命令/向用户提问。
 
 工具以 LangChain ``StructuredTool`` 定义，schema 由 ``args_schema`` 自动生成；
 ``safety`` / ``risk`` / ``preview`` 等元数据挂在 ``tool.metadata`` 上（非只读工具
@@ -16,11 +16,13 @@ from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_core.tools import InjectedToolArg, StructuredTool
 from pydantic import BaseModel, Field, ValidationError
 
+from codepilot.core.errors import DomainError
 from codepilot.domain.enums import ToolSafety
 from codepilot.domain.ports import Executor, WorkspaceProvider
 
 RISK_BY_SAFETY: dict[ToolSafety, str] = {
     ToolSafety.READ: "low",
+    ToolSafety.ASK: "low",
     ToolSafety.WRITE: "medium",
     ToolSafety.EXEC: "high",
 }
@@ -73,6 +75,16 @@ class EditFileArgs(BaseModel):
     )
 
 
+class AskUserArgs(BaseModel):
+    question: str = Field(
+        description="要向用户澄清的问题；仅在信息缺失或需求存在歧义时使用，不要臆测"
+    )
+    options: list[str] = Field(
+        default_factory=list,
+        description="供用户快速选择的候选答案；为空则只提供自由输入",
+    )
+
+
 class RunCommandArgs(BaseModel):
     argv: list[str] = Field(
         description="命令及其参数，逐项给出（不经过 shell，不解释管道/重定向）"
@@ -115,6 +127,15 @@ async def _edit_file(
     return f"已编辑 {path}（替换 {count} 处）"
 
 
+async def _ask_user(
+    question: str,
+    options: list[str],
+    config: Annotated[RunnableConfig, InjectedToolArg],
+) -> str:
+    # 正常路径由 tools_node 拦截并 interrupt()，不会走到这里
+    raise DomainError("ask_user 必须由工具节点的 interrupt 处理")
+
+
 async def _run_command(
     argv: list[str], config: Annotated[RunnableConfig, InjectedToolArg]
 ) -> str:
@@ -149,6 +170,10 @@ def _write_preview(args: WriteFileArgs) -> str:
 
 def _edit_preview(args: EditFileArgs) -> str:
     return f"编辑 {args.path}：\n- {args.old_string}\n+ {args.new_string}"
+
+
+def _ask_preview(args: AskUserArgs) -> str:
+    return f"询问用户：{args.question}"
 
 
 def _run_preview(args: RunCommandArgs) -> str:
@@ -223,6 +248,19 @@ edit_file = _make_tool(
     preview=_edit_preview,
 )
 
+ask_user = _make_tool(
+    coroutine=_ask_user,
+    name="ask_user",
+    description=(
+        "当需求不明确、缺少关键信息或存在多种合理做法时，向用户提问澄清，"
+        "不要自行臆测。可提供候选选项；调用后 run 会暂停直到用户回答，"
+        "用户的回答会作为本工具的结果返回。"
+    ),
+    args_schema=AskUserArgs,
+    safety=ToolSafety.ASK,
+    preview=_ask_preview,
+)
+
 run_command = _make_tool(
     coroutine=_run_command,
     name="run_command",
@@ -238,6 +276,7 @@ TOOLS: list[StructuredTool] = [
     list_dir,
     write_file,
     edit_file,
+    ask_user,
     run_command,
 ]
 TOOLS_BY_NAME: dict[str, StructuredTool] = {tool.name: tool for tool in TOOLS}

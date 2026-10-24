@@ -11,13 +11,19 @@ import pytest
 from codepilot.application.chat_service import ChatService
 from codepilot.application.event_bus import EventBus
 from codepilot.application.events import RunStarted
-from codepilot.core.errors import DomainError, NotFoundError, PermissionDeniedError
-from codepilot.domain.entities import Approval, Message, Session, ToolCall
+from codepilot.core.errors import (
+    DomainError,
+    NotFoundError,
+    PermissionDeniedError,
+    ValidationError,
+)
+from codepilot.domain.entities import Approval, Message, Question, Session, ToolCall
 from codepilot.domain.enums import MessageRole
 from codepilot.domain.events import (
     AgentEvent,
     ApprovalRequiredEvent,
     MessageEvent,
+    QuestionRequiredEvent,
     RunFinishedEvent,
 )
 
@@ -75,11 +81,15 @@ class FakeOrchestrator:
         self._first = first
         self._second = second
         self.resumed: list[tuple[str, bool]] = []
+        self.answered: list[tuple[str, str]] = []
 
     def _bind(self, event: AgentEvent, run_id: str, session_id: str) -> AgentEvent:
         if isinstance(event, ApprovalRequiredEvent):
             approval = replace(event.approval, run_id=run_id, session_id=session_id)
             return replace(event, run_id=run_id, approval=approval)
+        if isinstance(event, QuestionRequiredEvent):
+            question = replace(event.question, run_id=run_id, session_id=session_id)
+            return replace(event, run_id=run_id, question=question)
         return replace(event, run_id=run_id)
 
     async def stream(
@@ -96,6 +106,11 @@ class FakeOrchestrator:
 
     async def resume(self, run_id: str, *, approved: bool) -> AsyncIterator[AgentEvent]:
         self.resumed.append((run_id, approved))
+        for event in self._second:
+            yield replace(event, run_id=run_id)
+
+    async def answer(self, run_id: str, *, text: str) -> AsyncIterator[AgentEvent]:
+        self.answered.append((run_id, text))
         for event in self._second:
             yield replace(event, run_id=run_id)
 
@@ -197,6 +212,53 @@ async def test_send_surfaces_approval_and_resolve_continues(tmp_path: Path) -> N
     stored = await messages.list(session.id)
     assert stored[-1].role == MessageRole.ASSISTANT
     assert stored[-1].content == "写好了"
+
+
+async def test_question_surfaces_not_persisted_and_answer_continues(
+    tmp_path: Path,
+) -> None:
+    call = ToolCall(id="c1", name="ask_user", arguments={"question": "用哪个？"})
+    question = Question(
+        id="q1",
+        session_id="",
+        run_id="r",
+        text="用哪个？",
+        options=("alpha", "beta"),
+    )
+    orchestrator = FakeOrchestrator(
+        [
+            MessageEvent(run_id="r", seq=0, content="", tool_calls=(call,)),
+            QuestionRequiredEvent(run_id="r", seq=1, question=question),
+        ],
+        [
+            MessageEvent(run_id="r", seq=0, content="好的，用 alpha"),
+            RunFinishedEvent(run_id="r", seq=1, iterations=2),
+        ],
+    )
+    service, messages, approvals, bus = _service(orchestrator, allowlist=[tmp_path])
+    seen: list[object] = []
+    bus.subscribe(seen.append)
+    session = await service.create_session(workspace_path=tmp_path)
+
+    await service.send(session.id, "改代码")
+    surfaced = next(e for e in seen if isinstance(e, QuestionRequiredEvent))
+    assert surfaced.question.session_id == session.id
+    # 提问广播、不落审批表；暂停时只有用户消息入库
+    assert approvals.data == {}
+    assert [m.role for m in await messages.list(session.id)] == [MessageRole.USER]
+
+    await service.answer_question(session.id, surfaced.run_id, "alpha")
+    assert orchestrator.answered == [(surfaced.run_id, "alpha")]
+    stored = await messages.list(session.id)
+    assert stored[-1].role == MessageRole.ASSISTANT
+    assert stored[-1].content == "好的，用 alpha"
+
+
+async def test_empty_answer_is_rejected(tmp_path: Path) -> None:
+    service, _, _, _ = _service(FakeOrchestrator([], []), allowlist=[tmp_path])
+    session = await service.create_session(workspace_path=tmp_path)
+    with pytest.raises(ValidationError):
+        await service.answer_question(session.id, "r1", "   ")
 
 
 async def test_resolve_unknown_approval_raises(tmp_path: Path) -> None:

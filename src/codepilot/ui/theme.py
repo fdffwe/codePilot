@@ -185,6 +185,33 @@ def build_stylesheet() -> str:
         font-size: 13px;
     }}
 
+    /* --- 提问卡片 --- */
+    #QuestionCard {{
+        background: {CARD};
+        border: 1px solid {PRIMARY};
+        border-radius: {RADIUS_SM}px;
+    }}
+    #QuestionTitle {{ color: {PRIMARY}; font-weight: 600; }}
+    #QuestionText {{ color: {TEXT}; }}
+    #QuestionInput {{
+        background: {CARD};
+        border: 1px solid {BORDER};
+        border-radius: {RADIUS_SM}px;
+        padding: 8px 12px;
+        selection-background-color: {PRIMARY};
+        selection-color: #FFFFFF;
+    }}
+    #QuestionInput:focus {{ border-color: {PRIMARY}; }}
+
+    /* --- 应用内提醒浮层 --- */
+    #Toast {{
+        background: {CARD};
+        border: 1px solid {PRIMARY};
+        border-radius: 10px;
+    }}
+    #ToastTitle {{ color: {PRIMARY}; font-weight: 600; }}
+    #ToastBody {{ color: {TEXT}; }}
+
     /* --- 活动栏 --- */
     #ActivityBar {{
         background: #F1ECE4;

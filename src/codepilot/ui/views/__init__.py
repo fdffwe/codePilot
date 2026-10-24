@@ -8,6 +8,7 @@ from codepilot.ui.views.main_tabs import MainTabs
 from codepilot.ui.views.message_bubble import CodeBlock, MessageBubble
 from codepilot.ui.views.sidebar import SessionSidebar
 from codepilot.ui.views.title_bar import TitleBar
+from codepilot.ui.views.toast import Toast
 
 __all__ = [
     "ActivityBar",
@@ -19,4 +20,5 @@ __all__ = [
     "MessageBubble",
     "SessionSidebar",
     "TitleBar",
+    "Toast",
 ]

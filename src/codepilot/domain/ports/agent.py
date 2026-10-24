@@ -28,3 +28,6 @@ class AgentOrchestrator(Protocol):
 
     def resume(self, run_id: str, *, approved: bool) -> AsyncIterator[AgentEvent]:
         """对暂停中的 run 给出审批结论并继续，流式产出后续事件。"""
+
+    def answer(self, run_id: str, *, text: str) -> AsyncIterator[AgentEvent]:
+        """回答暂停中的 run 的澄清提问并继续，流式产出后续事件。"""

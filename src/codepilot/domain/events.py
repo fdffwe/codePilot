@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from codepilot.domain.entities import Approval, ToolCall
+from codepilot.domain.entities import Approval, Question, ToolCall
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +55,13 @@ class ApprovalRequiredEvent(AgentEvent):
     """写/执行类工具需人工确认；run 在此暂停，待 ``resume``。"""
 
     approval: Approval
+
+
+@dataclass(frozen=True, slots=True)
+class QuestionRequiredEvent(AgentEvent):
+    """Agent 需要用户澄清；run 在此暂停，待 ``answer``。"""
+
+    question: Question
 
 
 @dataclass(frozen=True, slots=True)

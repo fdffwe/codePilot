@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from codepilot.application.event_bus import EventBus
 from codepilot.application.events import RunStarted, SessionCreated
-from codepilot.core.errors import DomainError, NotFoundError
+from codepilot.core.errors import DomainError, NotFoundError, ValidationError
 from codepilot.core.paths import ensure_allowed
 from codepilot.domain.entities import Message, Session, WorkspaceEntry
 from codepilot.domain.enums import MessageRole
@@ -98,6 +98,15 @@ class ChatService:
         await self._approvals.resolve(approval_id, approved=approved)
         session = await self._require_session(approval.session_id)
         events = self._orchestrator.resume(approval.run_id, approved=approved)
+        await self._drive(events, session)
+
+    async def answer_question(self, session_id: str, run_id: str, text: str) -> None:
+        """回答 agent 的澄清提问并继续 run（问题/回答本身不落库）。"""
+        answer = text.strip()
+        if not answer:
+            raise ValidationError("回答不能为空")
+        session = await self._require_session(session_id)
+        events = self._orchestrator.answer(run_id, text=answer)
         await self._drive(events, session)
 
     async def list_workspace_entries(

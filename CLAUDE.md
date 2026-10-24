@@ -51,15 +51,15 @@ ui ─▶ application ─▶ domain ◀─ infrastructure（实现 domain 的 po
 ### 关键数据流
 
 1. **GUI → 用例**：`ui/viewmodels/chat_viewmodel.py` 持有 `ChatService`，用 `asyncio.ensure_future` 拉起协程并把结果转成 Qt Signal；Widget 只连信号、不写业务逻辑。
-2. **用例 → Agent**：`application/chat_service.py` 调 `AgentOrchestrator.stream()`，逐条消费领域事件 `domain/events.py`（`Message/ToolCall/ToolResult/ApprovalRequired/RunFinished/Error`），落库消息与审批。
+2. **用例 → Agent**：`application/chat_service.py` 调 `AgentOrchestrator.stream()`，逐条消费领域事件 `domain/events.py`（`Message/ToolCall/ToolResult/ApprovalRequired/QuestionRequired/RunFinished/Error`），落库消息与审批（提问不落库）。
 3. **框架隔离**：`infrastructure/agent/orchestrator.py`（`LangGraphOrchestrator`）实现 `AgentOrchestrator` 端口，把 LangGraph 的 `astream(updates)` 转译成领域事件，框架类型不外泄（映射层 `mappers.py`）。
 4. **事件回 UI**：`application/event_bus.py`（同步进程内总线）→ `ui/bridge.py::EventBridge` 把事件转成 Qt Signal；`ui/app.py` 用 **qasync** 融合 asyncio 与 Qt 事件循环。
 
 ### Agent 引擎（仅存在于 `infrastructure/agent/`）
 
 - `graph.py`：**单个 StateGraph**，`agent ↔ tools` 循环，条件边由 `tool_calls` 与 `max_iterations` 决定。
-- **HITL**：`safety != read` 的工具在 `tools_node` 执行前 `interrupt({...})` 暂停；`ChatService.resolve_approval` → `orchestrator.resume` 用 `Command(resume=approved)` 恢复。检查点用 SQLite，`thread_id = run_id`。
-- `tools.py`：`ToolSpec` 表（`read_file/list_dir/write_file/run_command`），每个工具带 `ToolSafety` 与 `risk`。**工具函数体不直接碰文件/命令**，一律经 `WorkspaceProvider` / `Executor` 端口。
+- **HITL**：写/执行工具在 `tools_node` 执行前 `interrupt({...})` 暂停；`ChatService.resolve_approval` → `orchestrator.resume` 用 `Command(resume=approved)` 恢复。`ask_user`（safety=`ASK`）同样 `interrupt`，用户回答经 `ChatService.answer_question` → `orchestrator.answer` 以 `Command(resume=text)` 恢复；问题不持久化。检查点用 SQLite，`thread_id = run_id`。
+- `tools.py`：LangChain `StructuredTool` 集合 `TOOLS`（`read_file/list_dir/write_file/edit_file/ask_user/run_command`），`safety`/`risk`/`preview` 挂在 `tool.metadata`。**工具函数体不直接碰文件/命令**，一律经 `WorkspaceProvider` / `Executor` 端口。
 - 一次 run 的运行时依赖走 `RunDeps`，经 LangGraph `config["configurable"]` 注入节点，**不进 checkpoint 状态**。
 
 ## 需要遵守的项目不变量

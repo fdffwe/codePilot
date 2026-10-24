@@ -34,9 +34,9 @@
 
 ---
 
-> **进展（2026-10-24）**：P4（校验失败回传 error ToolMessage）、P5（改用 `StructuredTool`）、P9（工具单测）已修复；工具集已补 `edit_file`。以下问题清单与差距表保留原始基线描述。
+> **进展（2026-10-24）**：P4（校验失败回传 error ToolMessage）、P5（改用 `StructuredTool`）、P9（工具单测）已修复；工具集已补 `edit_file` 与用户沟通工具 `ask_user`（提问时 run 暂停，回答后继续；问题不落库）。UI 增加审批/提问/结束/出错的浮层与任务栏提醒。以下问题清单与差距表保留原始基线描述。
 
-## 3. 当前工具清单（5 个）
+## 3. 当前工具清单（6 个）
 
 | 工具 | safety | risk | 参数 | 实现 |
 |------|--------|------|------|------|
@@ -44,6 +44,7 @@
 | `list_dir` | READ | low | `path="."` | `workspace.list_dir` |
 | `write_file` | WRITE | medium | `path`, `content` | `workspace.write_text`（整文件覆盖） |
 | `edit_file` | WRITE | medium | `path`, `old_string`, `new_string`, `replace_all=false` | `workspace.edit_text`（精确字符串替换） |
+| `ask_user` | ASK | low | `question`, `options=[]` | 无 IO；`tools_node` 以 `interrupt()` 暂停等待回答 |
 | `run_command` | EXEC | high | `argv: list[str]` | `executor.run` |
 
 **优点**：路径安全闸门扎实（`resolve` + `ensure_within` 拒越界/软链，`local_workspace.py:28-33`）；执行器无 `shell=True`、超时杀进程组、输出上限（`local_executor.py:42-117`）——这两处是全项目质量最高的部分。
@@ -54,11 +55,11 @@
 
 ### 高严重度
 
-**P1 — 工具能力不足，缺 `grep`/`glob`**（`edit_file` 已补）
-TDD §6.5 规划了 12 个工具。`edit_file` 已实现精确字符串替换（唯一匹配，或 `replace_all`），不再需要整文件重写。当前仍缺 `grep`/`glob`：agent 探索代码只能 `list_dir`+逐个 `read_file`，效率极低。
+**P1 — 工具能力不足，缺 `grep`/`glob`**（`edit_file`、`ask_user` 已补）
+TDD §6.5 规划了 12 个工具。`edit_file` 已实现精确字符串替换（唯一匹配，或 `replace_all`），不再需要整文件重写；`ask_user` 让模型在信息不足时主动澄清。当前仍缺 `grep`/`glob`：agent 探索代码只能 `list_dir`+逐个 `read_file`，效率极低。
 
 **P2 — 无幂等保护，`interrupt` 重放可能重复执行副作用**
-LangGraph 的 `interrupt()`（`graph.py`）会让节点从开头重跑。`tools_node` 在循环里对**多个非只读调用逐个 interrupt**，这是已知反模式（resume 值按顺序匹配，易错位），且规范 §10/§6.3 明确要求"副作用带幂等键 `tool_call_id`，重放不重复生效"——当前**无任何已执行集合**，重放即重复写盘/跑命令。
+LangGraph 的 `interrupt()`（`graph.py`）会让节点从开头重跑。`tools_node` 在循环里对**多个非只读调用逐个 interrupt**，这是已知反模式（resume 值按顺序匹配，易错位），且规范 §10/§6.3 明确要求"副作用带幂等键 `tool_call_id`，重放不重复生效"——当前**无任何已执行集合**，重放即重复写盘/跑命令。`ask_user` 会放大该问题（同一批次中排在提问之前的工具每次回答都会重跑）；目前仅靠 `_pending_kind` 防止 resume 类型错配，未做幂等。
 
 **P3 — 工具结果无大小控制，会撑爆上下文**
 `read_file`/`run_command` 输出原样塞进 `ToolMessage`（`tools.py:57-68, 71-82`），只有 Executor 层 1MB 硬截断，无 token 预算/行数限制/外置。读大文件或长命令输出后，下一轮 LLM 调用会超上下文或花费巨大。TDD §6.6/§8 要求"长输出外置 + lazy 读取"。
@@ -96,6 +97,7 @@ TDD §8 / 规范 §16 要求危险命令（`rm -rf /`、`sudo`、`mkfs`…）拒
 | `list_dir` `read_file` `grep` `glob` | ✅ ✅ ❌ ❌ |
 | `write_file` `edit_file` `delete_file` `apply_patch` | ✅ ✅ ❌ ❌ |
 | `run_command` `run_tests` `build` | ✅ ❌ ❌ |
+| 用户沟通（主动澄清） | ✅ `ask_user` |
 | 工具带 `safety` 元数据 | ✅ 有 |
 | 工具经端口（不直接碰 IO） | ✅ 做到了 |
 | 用 LangChain `@tool`/`StructuredTool` | ✅ 已改用 `StructuredTool` |

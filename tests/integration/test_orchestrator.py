@@ -11,7 +11,9 @@ from codepilot.domain.entities import Message
 from codepilot.domain.enums import MessageRole
 from codepilot.domain.events import (
     ApprovalRequiredEvent,
+    ErrorEvent,
     MessageEvent,
+    QuestionRequiredEvent,
     RunFinishedEvent,
     ToolCallEvent,
     ToolResultEvent,
@@ -148,6 +150,167 @@ async def test_iteration_cap_stops_loop(tmp_path: Path) -> None:
     ]
     assert isinstance(events[-1], RunFinishedEvent)
     assert events[-1].iterations <= 2
+
+
+async def test_ask_user_pauses_and_answer_resumes(tmp_path: Path) -> None:
+    orch = _orchestrator(
+        [
+            _tool_call(
+                "ask_user",
+                {"question": "用哪个名字？", "options": ["alpha", "beta"]},
+                "q1",
+            ),
+            AIMessage(content="好的，用 alpha"),
+        ],
+        tmp_path,
+    )
+    first = [
+        ev
+        async for ev in orch.stream(
+            run_id="r6",
+            session_id="s1",
+            model="fake",
+            messages=[_user("改代码")],
+            workspace_path=str(tmp_path),
+        )
+    ]
+    asked = next(e for e in first if isinstance(e, QuestionRequiredEvent))
+    assert asked.question.text == "用哪个名字？"
+    assert asked.question.options == ("alpha", "beta")
+    assert asked.question.session_id == "s1"
+    assert not any(isinstance(e, ApprovalRequiredEvent) for e in first)
+    assert not any(isinstance(e, RunFinishedEvent) for e in first)
+
+    second = [ev async for ev in orch.answer("r6", text="alpha")]
+    result = next(e for e in second if isinstance(e, ToolResultEvent))
+    assert result.output == "alpha"
+    assert result.ok
+    assert result.call.name == "ask_user"
+    assert any(
+        isinstance(e, MessageEvent) and e.content == "好的，用 alpha" for e in second
+    )
+    assert isinstance(second[-1], RunFinishedEvent)
+
+
+async def test_ask_user_invalid_args_do_not_pause(tmp_path: Path) -> None:
+    orch = _orchestrator(
+        [
+            _tool_call("ask_user", {}, "q1"),  # 缺 question
+            AIMessage(content="参数不对"),
+        ],
+        tmp_path,
+    )
+    events = [
+        ev
+        async for ev in orch.stream(
+            run_id="r7",
+            session_id="s1",
+            model="fake",
+            messages=[_user("提问")],
+            workspace_path=str(tmp_path),
+        )
+    ]
+    assert not any(isinstance(e, QuestionRequiredEvent) for e in events)
+    assert not any(isinstance(e, ApprovalRequiredEvent) for e in events)
+    result = next(e for e in events if isinstance(e, ToolResultEvent))
+    assert not result.ok
+    assert isinstance(events[-1], RunFinishedEvent)
+
+
+async def test_ask_user_then_write_requires_approval(tmp_path: Path) -> None:
+    orch = _orchestrator(
+        [
+            _tool_call("ask_user", {"question": "写什么？"}, "q1"),
+            _tool_call("write_file", {"path": "a.py", "content": "x = 1\n"}, "w1"),
+            AIMessage(content="完成"),
+        ],
+        tmp_path,
+    )
+    first = [
+        ev
+        async for ev in orch.stream(
+            run_id="r8",
+            session_id="s1",
+            model="fake",
+            messages=[_user("改代码")],
+            workspace_path=str(tmp_path),
+        )
+    ]
+    assert any(isinstance(e, QuestionRequiredEvent) for e in first)
+
+    second = [ev async for ev in orch.answer("r8", text="写个变量")]
+    assert any(isinstance(e, ApprovalRequiredEvent) for e in second)
+    assert not (tmp_path / "a.py").exists()
+    assert not any(isinstance(e, RunFinishedEvent) for e in second)
+
+    third = [ev async for ev in orch.resume("r8", approved=True)]
+    assert (tmp_path / "a.py").read_text(encoding="utf-8") == "x = 1\n"
+    assert isinstance(third[-1], RunFinishedEvent)
+
+
+async def test_answer_wrong_kind_is_rejected(tmp_path: Path) -> None:
+    orch = _orchestrator(
+        [
+            _tool_call("ask_user", {"question": "继续吗？"}, "q1"),
+            AIMessage(content="好的"),
+        ],
+        tmp_path,
+    )
+    first = [
+        ev
+        async for ev in orch.stream(
+            run_id="r9",
+            session_id="s1",
+            model="fake",
+            messages=[_user("提问")],
+            workspace_path=str(tmp_path),
+        )
+    ]
+    assert any(isinstance(e, QuestionRequiredEvent) for e in first)
+
+    wrong = [ev async for ev in orch.resume("r9", approved=True)]
+    assert len(wrong) == 1 and isinstance(wrong[0], ErrorEvent)
+
+    right = [ev async for ev in orch.answer("r9", text="继续")]
+    assert isinstance(right[-1], RunFinishedEvent)
+
+
+async def test_multiple_writes_get_distinct_approval_ids(tmp_path: Path) -> None:
+    batch = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "write_file",
+                "args": {"path": "a.py", "content": "a"},
+                "id": "c1",
+            },
+            {
+                "name": "write_file",
+                "args": {"path": "b.py", "content": "b"},
+                "id": "c2",
+            },
+        ],
+    )
+    orch = _orchestrator([batch, AIMessage(content="完成")], tmp_path)
+    first = [
+        ev
+        async for ev in orch.stream(
+            run_id="r10",
+            session_id="s1",
+            model="fake",
+            messages=[_user("写两个文件")],
+            workspace_path=str(tmp_path),
+        )
+    ]
+    first_approval = next(e for e in first if isinstance(e, ApprovalRequiredEvent))
+
+    second = [ev async for ev in orch.resume("r10", approved=True)]
+    second_approval = next(e for e in second if isinstance(e, ApprovalRequiredEvent))
+    assert first_approval.approval.id != second_approval.approval.id
+
+    third = [ev async for ev in orch.resume("r10", approved=True)]
+    assert (tmp_path / "a.py").exists() and (tmp_path / "b.py").exists()
+    assert isinstance(third[-1], RunFinishedEvent)
 
 
 async def test_invalid_tool_args_do_not_abort_run(tmp_path: Path) -> None:

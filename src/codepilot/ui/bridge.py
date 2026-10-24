@@ -10,11 +10,12 @@ from PySide6.QtCore import QObject, Signal
 
 from codepilot.application.event_bus import EventBus
 from codepilot.application.events import RunStarted
-from codepilot.domain.entities import Approval
+from codepilot.domain.entities import Approval, Question
 from codepilot.domain.events import (
     ApprovalRequiredEvent,
     ErrorEvent,
     MessageEvent,
+    QuestionRequiredEvent,
     RunFinishedEvent,
     ToolCallEvent,
     ToolResultEvent,
@@ -27,6 +28,7 @@ class EventBridge(QObject):
     toolCalled = Signal(str, str)  # name, arguments
     toolResult = Signal(str, bool)  # output, ok
     approvalRequested = Signal(object)  # Approval
+    questionAsked = Signal(object)  # Question
     runFinished = Signal(int)
     errorOccurred = Signal(str)
 
@@ -46,10 +48,12 @@ class EventBridge(QObject):
             self.toolResult.emit(event.output, event.ok)
         elif isinstance(event, ApprovalRequiredEvent):
             self.approvalRequested.emit(event.approval)
+        elif isinstance(event, QuestionRequiredEvent):
+            self.questionAsked.emit(event.question)
         elif isinstance(event, RunFinishedEvent):
             self.runFinished.emit(event.iterations)
         elif isinstance(event, ErrorEvent):
             self.errorOccurred.emit(event.message)
 
 
-__all__ = ["Approval", "EventBridge"]
+__all__ = ["Approval", "EventBridge", "Question"]

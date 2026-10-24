@@ -13,7 +13,7 @@ from PySide6.QtCore import QObject, Signal
 
 from codepilot.application.chat_service import ChatService
 from codepilot.core.errors import DomainError
-from codepilot.domain.entities import Session
+from codepilot.domain.entities import Question, Session
 
 
 class ChatViewModel(QObject):
@@ -61,6 +61,9 @@ class ChatViewModel(QObject):
     def resolve_approval(self, approval_id: str, approved: bool) -> None:
         self._spawn(self._resolve(approval_id, approved))
 
+    def answer_question(self, question: Question, text: str) -> None:
+        self._spawn(self._answer_question(question, text))
+
     def list_workspace_dir(self, path: str = ".") -> None:
         if self._current is None:
             return
@@ -105,6 +108,17 @@ class ChatViewModel(QObject):
         self.busyChanged.emit(True)
         try:
             await self._service.resolve_approval(approval_id, approved=approved)
+        except DomainError as exc:
+            self.errorOccurred.emit(str(exc))
+        finally:
+            self.busyChanged.emit(False)
+
+    async def _answer_question(self, question: Question, text: str) -> None:
+        self.busyChanged.emit(True)
+        try:
+            await self._service.answer_question(
+                question.session_id, question.run_id, text
+            )
         except DomainError as exc:
             self.errorOccurred.emit(str(exc))
         finally:

@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from codepilot.application.event_bus import EventBus
 from codepilot.application.events import RunStarted
-from codepilot.domain.entities import Approval, ToolCall
+from codepilot.domain.entities import Approval, Question, ToolCall
 from codepilot.domain.events import (
     ApprovalRequiredEvent,
     ErrorEvent,
     MessageEvent,
+    QuestionRequiredEvent,
     RunFinishedEvent,
     ToolCallEvent,
     ToolResultEvent,
@@ -65,6 +66,15 @@ def test_approval_requested_carries_entity() -> None:
     )
     bus.publish(ApprovalRequiredEvent(run_id="r1", seq=3, approval=approval))
     assert got == [approval]
+
+
+def test_question_required_maps_to_question_signal() -> None:
+    bus, bridge = _bridge()
+    got: list[Question] = []
+    bridge.questionAsked.connect(got.append)
+    question = Question(id="q1", session_id="s1", run_id="r1", text="用哪个？")
+    bus.publish(QuestionRequiredEvent(run_id="r1", seq=2, question=question))
+    assert got == [question]
 
 
 def test_run_finished_and_error_map_to_signals() -> None:

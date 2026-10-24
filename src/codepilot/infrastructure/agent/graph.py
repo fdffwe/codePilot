@@ -1,7 +1,8 @@
 """LangGraph 单图：agent ↔ tools 循环。
 
 - agent 节点：调用模型（已绑定工具）。
-- tools 节点：逐条执行工具调用；非只读工具在执行前 ``interrupt()`` 等待人工确认。
+- tools 节点：逐条执行工具调用；写/执行类工具在执行前 ``interrupt()`` 等待人工确认，
+  ``ask_user`` 则以 ``interrupt()`` 暂停并等待用户回答。
   工具以 LangChain ``StructuredTool`` 执行（schema 与参数校验由框架归口），
   安全/风险/预览等元数据挂在 ``tool.metadata``。见规范 §10「图约定」。
 """
@@ -11,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, ToolCall, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, StateGraph
@@ -21,7 +22,11 @@ from pydantic import BaseModel, ValidationError
 from codepilot.core.errors import DomainError
 from codepilot.domain.enums import ToolSafety
 from codepilot.infrastructure.agent.state import AgentState
-from codepilot.infrastructure.agent.tools import TOOLS_BY_NAME, _deps
+from codepilot.infrastructure.agent.tools import (
+    TOOLS_BY_NAME,
+    AskUserArgs,
+    _deps,
+)
 
 
 async def agent_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
@@ -48,6 +53,23 @@ def _try_preview(
     return args, render(args) if callable(render) else None
 
 
+async def _invoke(
+    tool: BaseTool, call: ToolCall, config: RunnableConfig
+) -> ToolMessage:
+    """执行工具；领域异常转成 error 结果，避免终止整个 run。"""
+    name = str(call["name"])
+    call_id = str(call["id"])
+    try:
+        return await tool.ainvoke(call, config)
+    except DomainError as exc:
+        return ToolMessage(
+            content=f"错误：{exc}",
+            tool_call_id=call_id,
+            status="error",
+            name=name,
+        )
+
+
 async def tools_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
     last = state["messages"][-1]
     if not isinstance(last, AIMessage):
@@ -66,34 +88,56 @@ async def tools_node(state: AgentState, config: RunnableConfig) -> dict[str, Any
             continue
 
         metadata = tool.metadata or {}
-        if metadata.get("safety", ToolSafety.WRITE) != ToolSafety.READ:
-            # 仅在参数可执行时才询问；校验不过则交给 ainvoke 回传错误（无副作用）
-            parsed, preview = _try_preview(tool, call)
-            if parsed is not None and not interrupt(
+        safety = metadata.get("safety", ToolSafety.WRITE)
+        # 仅在参数可执行时才询问/提问；校验不过则交给 ainvoke 回传错误（无副作用）
+        parsed, preview = _try_preview(tool, call)
+
+        if safety is ToolSafety.ASK:
+            # 提问由节点接管：不执行工具函数体，直接把用户回答作为工具结果
+            if isinstance(parsed, AskUserArgs):
+                answer = interrupt(
+                    {
+                        "kind": "question",
+                        "tool": name,
+                        "question": parsed.question,
+                        "options": list(parsed.options),
+                    }
+                )
+                results.append(
+                    ToolMessage(
+                        content=str(answer),
+                        tool_call_id=call_id,
+                        name=name,
+                    )
+                )
+            else:
+                results.append(await _invoke(tool, call, config))
+            continue
+
+        if (
+            safety is not ToolSafety.READ
+            and parsed is not None
+            and not interrupt(
                 {
+                    "kind": "approval",
                     "tool": name,
                     "arguments": call.get("args") or {},
                     "preview": preview or "",
                     "risk": metadata.get("risk", "medium"),
                 }
-            ):
-                results.append(
-                    ToolMessage(
-                        content="用户拒绝了该操作。",
-                        tool_call_id=call_id,
-                        status="error",
-                    )
-                )
-                continue
-
-        try:
-            results.append(await tool.ainvoke(call, config))
-        except DomainError as exc:
+            )
+        ):
             results.append(
                 ToolMessage(
-                    content=f"错误：{exc}", tool_call_id=call_id, status="error"
+                    content="用户拒绝了该操作。",
+                    tool_call_id=call_id,
+                    status="error",
+                    name=name,
                 )
             )
+            continue
+
+        results.append(await _invoke(tool, call, config))
     return {"messages": results}
 
 
