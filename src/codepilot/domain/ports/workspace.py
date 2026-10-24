@@ -24,6 +24,15 @@ class WorkspaceProvider(Protocol):
 
     async def write_text(self, path: str, content: str) -> None: ...
 
+    async def edit_text(
+        self, path: str, old: str, new: str, *, replace_all: bool = False
+    ) -> int:
+        """精确字符串替换，返回替换处数。
+
+        ``old`` 为空、未匹配或（``replace_all=False`` 时）不唯一，抛
+        :class:`~codepilot.core.errors.ValidationError`。
+        """
+
     async def list_dir(self, path: str = ".") -> list[str]: ...
 
     async def list_entries(self, path: str = ".") -> list[WorkspaceEntry]: ...

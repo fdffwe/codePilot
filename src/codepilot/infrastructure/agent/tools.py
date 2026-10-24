@@ -63,6 +63,16 @@ class WriteFileArgs(BaseModel):
     content: str = Field(description="写入的完整文件内容")
 
 
+class EditFileArgs(BaseModel):
+    path: str = Field(description="相对工作区根目录的文件路径")
+    old_string: str = Field(description="待替换的原文本，须与文件内容精确匹配")
+    new_string: str = Field(description="替换后的新文本")
+    replace_all: bool = Field(
+        default=False,
+        description="是否替换全部匹配；默认 false，此时原文须在文件中唯一",
+    )
+
+
 class RunCommandArgs(BaseModel):
     argv: list[str] = Field(
         description="命令及其参数，逐项给出（不经过 shell，不解释管道/重定向）"
@@ -90,6 +100,19 @@ async def _write_file(
 ) -> str:
     await _deps(config).workspace.write_text(path, content)
     return f"已写入 {path}（{len(content)} 字符）"
+
+
+async def _edit_file(
+    path: str,
+    old_string: str,
+    new_string: str,
+    replace_all: bool,
+    config: Annotated[RunnableConfig, InjectedToolArg],
+) -> str:
+    count = await _deps(config).workspace.edit_text(
+        path, old_string, new_string, replace_all=replace_all
+    )
+    return f"已编辑 {path}（替换 {count} 处）"
 
 
 async def _run_command(
@@ -122,6 +145,10 @@ def _list_preview(args: ListDirArgs) -> str:
 
 def _write_preview(args: WriteFileArgs) -> str:
     return f"写入 {args.path}：\n{args.content}"
+
+
+def _edit_preview(args: EditFileArgs) -> str:
+    return f"编辑 {args.path}：\n- {args.old_string}\n+ {args.new_string}"
 
 
 def _run_preview(args: RunCommandArgs) -> str:
@@ -184,6 +211,18 @@ write_file = _make_tool(
     preview=_write_preview,
 )
 
+edit_file = _make_tool(
+    coroutine=_edit_file,
+    name="edit_file",
+    description=(
+        "对工作区内的文件做精确字符串替换，无需重写整个文件。"
+        "默认要求 old_string 唯一；替换全部匹配时设置 replace_all=true。"
+    ),
+    args_schema=EditFileArgs,
+    safety=ToolSafety.WRITE,
+    preview=_edit_preview,
+)
+
 run_command = _make_tool(
     coroutine=_run_command,
     name="run_command",
@@ -194,5 +233,11 @@ run_command = _make_tool(
 )
 
 
-TOOLS: list[StructuredTool] = [read_file, list_dir, write_file, run_command]
+TOOLS: list[StructuredTool] = [
+    read_file,
+    list_dir,
+    write_file,
+    edit_file,
+    run_command,
+]
 TOOLS_BY_NAME: dict[str, StructuredTool] = {tool.name: tool for tool in TOOLS}

@@ -11,7 +11,7 @@
 
 "工具层"在本项目有两个层面，本报告覆盖两者：
 
-- **Agent Tool 层（核心）**：AI 可调用的能力，即 `TOOL_SPECS` 定义的 4 个工具。
+- **Agent Tool 层（核心）**：AI 可调用的能力，即 `tools.py` 注册的 5 个工具。
 - **工具依赖的端口/适配器**：工具背后真正干活的 `WorkspaceProvider`、`Executor`，以及模型接缝 `ChatModelFactory`。
 
 ---
@@ -20,7 +20,7 @@
 
 | 文件 | 职责 | 关键位置 |
 |------|------|----------|
-| `infrastructure/agent/tools.py` | 工具定义、参数模型、schema、实现 | `ToolSpec`（L85）、`TOOL_SPECS`（L122） |
+| `infrastructure/agent/tools.py` | 工具定义、参数模型、实现（LangChain `StructuredTool`） | `_make_tool`、`TOOLS` |
 | `infrastructure/agent/graph.py` | `agent↔tools` 单图；工具执行与 `interrupt()` 审批 | `tools_node`（L36） |
 | `infrastructure/agent/orchestrator.py` | 把图事件转成领域事件；注入 `RunDeps` | `_node_events`（L173） |
 | `infrastructure/agent/mappers.py` | domain `Message` ↔ LangChain 消息 | `from_ai_message`（L31） |
@@ -34,13 +34,16 @@
 
 ---
 
-## 3. 当前工具清单（仅 4 个）
+> **进展（2026-10-24）**：P4（校验失败回传 error ToolMessage）、P5（改用 `StructuredTool`）、P9（工具单测）已修复；工具集已补 `edit_file`。以下问题清单与差距表保留原始基线描述。
+
+## 3. 当前工具清单（5 个）
 
 | 工具 | safety | risk | 参数 | 实现 |
 |------|--------|------|------|------|
 | `read_file` | READ | low | `path` | `workspace.read_text` |
 | `list_dir` | READ | low | `path="."` | `workspace.list_dir` |
 | `write_file` | WRITE | medium | `path`, `content` | `workspace.write_text`（整文件覆盖） |
+| `edit_file` | WRITE | medium | `path`, `old_string`, `new_string`, `replace_all=false` | `workspace.edit_text`（精确字符串替换） |
 | `run_command` | EXEC | high | `argv: list[str]` | `executor.run` |
 
 **优点**：路径安全闸门扎实（`resolve` + `ensure_within` 拒越界/软链，`local_workspace.py:28-33`）；执行器无 `shell=True`、超时杀进程组、输出上限（`local_executor.py:42-117`）——这两处是全项目质量最高的部分。
@@ -51,11 +54,11 @@
 
 ### 高严重度
 
-**P1 — 工具能力严重不足，缺 `edit_file`/`grep`/`glob`**
-TDD §6.5 规划了 12 个工具，当前只有 4 个。最致命的是**没有 `edit_file`/`apply_patch`**：agent 改一行代码必须用 `write_file` 重写整个文件——token 浪费、易破坏无关内容、确认卡片（全文 preview）不可读。也没有 `grep`/`glob`，agent 探索代码只能 `list_dir`+逐个 `read_file`，效率极低。**这是编码助手最核心的短板。**
+**P1 — 工具能力不足，缺 `grep`/`glob`**（`edit_file` 已补）
+TDD §6.5 规划了 12 个工具。`edit_file` 已实现精确字符串替换（唯一匹配，或 `replace_all`），不再需要整文件重写。当前仍缺 `grep`/`glob`：agent 探索代码只能 `list_dir`+逐个 `read_file`，效率极低。
 
 **P2 — 无幂等保护，`interrupt` 重放可能重复执行副作用**
-LangGraph 的 `interrupt()`（`graph.py:55`）会让节点重跑。`tools_node` 在循环里对**多个非只读调用逐个 interrupt**，这是已知反模式（resume 值按顺序匹配，易错位），且规范 §10/§6.3 明确要求"副作用带幂等键 `tool_call_id`，重放不重复生效"——当前**无任何已执行集合**，重放即重复写盘/跑命令。
+LangGraph 的 `interrupt()`（`graph.py`）会让节点从开头重跑。`tools_node` 在循环里对**多个非只读调用逐个 interrupt**，这是已知反模式（resume 值按顺序匹配，易错位），且规范 §10/§6.3 明确要求"副作用带幂等键 `tool_call_id`，重放不重复生效"——当前**无任何已执行集合**，重放即重复写盘/跑命令。
 
 **P3 — 工具结果无大小控制，会撑爆上下文**
 `read_file`/`run_command` 输出原样塞进 `ToolMessage`（`tools.py:57-68, 71-82`），只有 Executor 层 1MB 硬截断，无 token 预算/行数限制/外置。读大文件或长命令输出后，下一轮 LLM 调用会超上下文或花费巨大。TDD §6.6/§8 要求"长输出外置 + lazy 读取"。
@@ -91,11 +94,11 @@ TDD §8 / 规范 §16 要求危险命令（`rm -rf /`、`sudo`、`mkfs`…）拒
 | 目标（TDD §6.5） | 现状 |
 |------------------|------|
 | `list_dir` `read_file` `grep` `glob` | ✅ ✅ ❌ ❌ |
-| `write_file` `edit_file` `delete_file` `apply_patch` | ✅ ❌ ❌ ❌ |
+| `write_file` `edit_file` `delete_file` `apply_patch` | ✅ ✅ ❌ ❌ |
 | `run_command` `run_tests` `build` | ✅ ❌ ❌ |
 | 工具带 `safety` 元数据 | ✅ 有 |
 | 工具经端口（不直接碰 IO） | ✅ 做到了 |
-| 用 LangChain `@tool`/`StructuredTool` | ❌ 自建 `ToolSpec` |
+| 用 LangChain `@tool`/`StructuredTool` | ✅ 已改用 `StructuredTool` |
 | 副作用幂等键 | ❌ 缺失 |
 | 长输出外置 | ❌ 缺失 |
 | 命令黑名单 | ❌ 缺失 |

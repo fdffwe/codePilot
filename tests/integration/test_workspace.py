@@ -6,7 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from codepilot.core.errors import NotFoundError, PermissionDeniedError
+from codepilot.core.errors import (
+    NotFoundError,
+    PermissionDeniedError,
+    ValidationError,
+)
 from codepilot.infrastructure.workspace import LocalDirectWorkspace
 
 
@@ -26,6 +30,49 @@ async def test_write_then_read_roundtrip(tmp_path: Path) -> None:
     await ws.write_text("pkg/mod.py", "x = 1\n")
     assert (tmp_path / "pkg" / "mod.py").read_text(encoding="utf-8") == "x = 1\n"
     assert await ws.read_text("pkg/mod.py") == "x = 1\n"
+
+
+async def test_edit_replaces_unique_occurrence(tmp_path: Path) -> None:
+    ws = _workspace(tmp_path)
+    await ws.write_text("mod.py", "x = 1\ny = 2\n")
+    assert await ws.edit_text("mod.py", "x = 1", "x = 42") == 1
+    assert await ws.read_text("mod.py") == "x = 42\ny = 2\n"
+
+
+async def test_edit_missing_text_raises_validation(tmp_path: Path) -> None:
+    ws = _workspace(tmp_path)
+    await ws.write_text("mod.py", "x = 1\n")
+    with pytest.raises(ValidationError):
+        await ws.edit_text("mod.py", "nope", "y = 2")
+    assert await ws.read_text("mod.py") == "x = 1\n"
+
+
+async def test_edit_ambiguous_requires_replace_all(tmp_path: Path) -> None:
+    ws = _workspace(tmp_path)
+    await ws.write_text("mod.py", "a\na\n")
+    with pytest.raises(ValidationError):
+        await ws.edit_text("mod.py", "a", "b")
+    assert await ws.edit_text("mod.py", "a", "b", replace_all=True) == 2
+    assert await ws.read_text("mod.py") == "b\nb\n"
+
+
+async def test_edit_empty_old_text_rejected(tmp_path: Path) -> None:
+    ws = _workspace(tmp_path)
+    await ws.write_text("mod.py", "x = 1\n")
+    with pytest.raises(ValidationError):
+        await ws.edit_text("mod.py", "", "y")
+
+
+async def test_edit_missing_file_raises_not_found(tmp_path: Path) -> None:
+    ws = _workspace(tmp_path)
+    with pytest.raises(NotFoundError):
+        await ws.edit_text("nope.py", "a", "b")
+
+
+async def test_edit_path_escape_is_rejected(tmp_path: Path) -> None:
+    ws = _workspace(tmp_path)
+    with pytest.raises(PermissionDeniedError):
+        await ws.edit_text("../outside.txt", "a", "b")
 
 
 async def test_read_missing_file_raises_not_found(tmp_path: Path) -> None:

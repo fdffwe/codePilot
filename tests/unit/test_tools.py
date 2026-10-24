@@ -13,6 +13,7 @@ from codepilot.domain.enums import ToolSafety
 from codepilot.infrastructure.agent.tools import (
     TOOLS,
     TOOLS_BY_NAME,
+    EditFileArgs,
     RunCommandArgs,
     RunDeps,
     WriteFileArgs,
@@ -60,6 +61,12 @@ def test_previews_render() -> None:
     write = TOOLS_BY_NAME["write_file"].metadata["preview"]
     assert write(WriteFileArgs(path="a.py", content="x=1")) == "写入 a.py：\nx=1"
 
+    edit = TOOLS_BY_NAME["edit_file"].metadata["preview"]
+    assert (
+        edit(EditFileArgs(path="a.py", old_string="x=1", new_string="x=2"))
+        == "编辑 a.py：\n- x=1\n+ x=2"
+    )
+
     run = TOOLS_BY_NAME["run_command"].metadata["preview"]
     assert run(RunCommandArgs(argv=["ls", "-l"])) == "执行命令：ls -l"
 
@@ -85,6 +92,44 @@ async def test_write_file_writes_and_creates_parent(tmp_path: Path) -> None:
     )
     assert (tmp_path / "out" / "x.py").read_text(encoding="utf-8") == "x=1\n"
     assert "已写入" in msg.content
+
+
+async def test_edit_file_replaces_once(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("x = 1\ny = 2\n", encoding="utf-8")
+    msg = await _invoke(
+        "edit_file",
+        {"path": "a.py", "old_string": "x = 1", "new_string": "x = 42"},
+        tmp_path,
+    )
+    assert (tmp_path / "a.py").read_text(encoding="utf-8") == "x = 42\ny = 2\n"
+    assert "已编辑 a.py" in msg.content
+    assert msg.status == "success"
+
+
+async def test_edit_file_replace_all(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("a\na\n", encoding="utf-8")
+    msg = await _invoke(
+        "edit_file",
+        {
+            "path": "a.py",
+            "old_string": "a",
+            "new_string": "b",
+            "replace_all": True,
+        },
+        tmp_path,
+    )
+    assert (tmp_path / "a.py").read_text(encoding="utf-8") == "b\nb\n"
+    assert "替换 2 处" in msg.content
+
+
+async def test_edit_file_missing_text_raises_domain_error(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    with pytest.raises(DomainError):
+        await _invoke(
+            "edit_file",
+            {"path": "a.py", "old_string": "nope", "new_string": "y"},
+            tmp_path,
+        )
 
 
 async def test_run_command_formats_output(tmp_path: Path) -> None:

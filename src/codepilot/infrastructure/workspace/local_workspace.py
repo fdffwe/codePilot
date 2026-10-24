@@ -9,7 +9,12 @@ from __future__ import annotations
 from collections.abc import Iterable
 from pathlib import Path
 
-from codepilot.core.errors import DomainError, NotFoundError, PermissionDeniedError
+from codepilot.core.errors import (
+    DomainError,
+    NotFoundError,
+    PermissionDeniedError,
+    ValidationError,
+)
 from codepilot.core.paths import ensure_allowed, ensure_within
 from codepilot.domain.entities import WorkspaceEntry
 
@@ -52,6 +57,27 @@ class LocalDirectWorkspace:
             raise PermissionDeniedError(f"无写入权限：{target}") from exc
         except OSError as exc:
             raise DomainError(f"写入失败：{target}") from exc
+
+    async def edit_text(
+        self, path: str, old: str, new: str, *, replace_all: bool = False
+    ) -> int:
+        """精确字符串替换（不做空白/换行归一化），返回替换处数。"""
+        if not old:
+            raise ValidationError("待替换内容不能为空")
+        if old == new:
+            raise ValidationError("新旧内容相同，无需编辑")
+        content = await self.read_text(path)
+        count = content.count(old)
+        if count == 0:
+            raise ValidationError(f"未找到待替换内容：{old[:80]!r}")
+        if count > 1 and not replace_all:
+            raise ValidationError(
+                f"待替换内容出现 {count} 次；请补充上下文使其唯一，"
+                "或设置 replace_all=true 全部替换"
+            )
+        updated = content.replace(old, new, -1 if replace_all else 1)
+        await self.write_text(path, updated)
+        return count if replace_all else 1
 
     async def list_dir(self, path: str = ".") -> list[str]:
         target = self.resolve(path)
