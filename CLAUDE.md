@@ -64,7 +64,7 @@ ui ─▶ application ─▶ domain ◀─ infrastructure（实现 domain 的 po
 
 - `graph.py`：**单个 StateGraph**，`agent ↔ tools` 循环，条件边由 `tool_calls` 与 `max_iterations` 决定。
 - **HITL**：写/执行工具在 `tools_node` 执行前 `interrupt({...})` 暂停；`ChatService.resolve_approval` → `orchestrator.resume` 用 `Command(resume=approved)` 恢复。`ask_user`（safety=`ASK`）同样 `interrupt`，用户回答经 `ChatService.answer_question` → `orchestrator.answer` 以 `Command(resume=text)` 恢复；问题不持久化。检查点用 SQLite，`thread_id = run_id`。
-- `tools.py`：LangChain `StructuredTool` 集合 `TOOLS`（`read_file/list_dir/write_file/edit_file/ask_user/run_command`），`safety`/`risk`/`preview` 挂在 `tool.metadata`。**工具函数体不直接碰文件/命令**，一律经 `WorkspaceProvider` / `Executor` 端口。
+- `tools.py`：LangChain `StructuredTool` 集合 `TOOLS`（`read_file/list_dir/glob/grep/write_file/edit_file/ask_user/run_command`），`safety`/`risk`/`preview` 挂在 `tool.metadata`。**工具函数体不直接碰文件/命令**，一律经 `WorkspaceProvider` / `Executor` 端口；检索（`glob`/`grep`）在 workspace 适配器内用 `asyncio.to_thread` 遍历，默认忽略 `.git`/`node_modules`/构建目录并跳过符号链接。
 - 一次 run 的运行时依赖走 `RunDeps`，经 LangGraph `config["configurable"]` 注入节点，**不进 checkpoint 状态**。
 
 ## 需要遵守的项目不变量

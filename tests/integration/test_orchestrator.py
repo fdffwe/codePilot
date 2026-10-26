@@ -74,6 +74,32 @@ async def test_read_flow_emits_tool_events_and_finishes(tmp_path: Path) -> None:
     assert isinstance(events[-1], RunFinishedEvent)
 
 
+async def test_grep_flow_locates_content(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("x = 1\nneedle = 2\n", encoding="utf-8")
+    orch = _orchestrator(
+        [
+            _tool_call("grep", {"pattern": "needle"}, "c1"),
+            AIMessage(content="找到了"),
+        ],
+        tmp_path,
+    )
+
+    events = [
+        ev
+        async for ev in orch.stream(
+            run_id="r1g",
+            session_id="s1",
+            model="fake",
+            messages=[_user("找 needle")],
+            workspace_path=str(tmp_path),
+        )
+    ]
+
+    result = next(e for e in events if isinstance(e, ToolResultEvent))
+    assert result.ok and "a.py:2: needle = 2" in result.output
+    assert isinstance(events[-1], RunFinishedEvent)
+
+
 async def test_write_requires_approval_and_resumes(tmp_path: Path) -> None:
     orch = _orchestrator(
         [

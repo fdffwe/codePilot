@@ -62,6 +62,33 @@ class WorkspaceEntry:
 
 
 @dataclass(frozen=True, slots=True)
+class GlobResult:
+    """按通配模式查找文件的结果；``total`` 为截断前的总匹配数。"""
+
+    paths: tuple[str, ...]
+    total: int
+    truncated: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class GrepMatch:
+    """一条内容匹配；``path`` 为工作区相对路径。"""
+
+    path: str
+    line: int
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class GrepResult:
+    """按正则搜索内容的结果；``skipped`` 为二进制/超大/不可读文件数。"""
+
+    matches: tuple[GrepMatch, ...]
+    truncated: bool = False
+    skipped: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class Question:
     """Agent 向用户发起的澄清提问；run 暂停等待回答。"""
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from codepilot.domain.entities import WorkspaceEntry
+from codepilot.domain.entities import GlobResult, GrepResult, WorkspaceEntry
 
 
 @runtime_checkable
@@ -36,3 +36,19 @@ class WorkspaceProvider(Protocol):
     async def list_dir(self, path: str = ".") -> list[str]: ...
 
     async def list_entries(self, path: str = ".") -> list[WorkspaceEntry]: ...
+
+    async def glob(
+        self, pattern: str, path: str = ".", *, max_results: int = 200
+    ) -> GlobResult:
+        """按通配模式查找文件；pattern 匹配工作区相对路径。"""
+
+    async def grep(
+        self,
+        pattern: str,
+        path: str = ".",
+        *,
+        glob: str | None = None,
+        case_sensitive: bool = True,
+        max_results: int = 100,
+    ) -> GrepResult:
+        """按正则表达式搜索文本内容，返回带行号的匹配。"""

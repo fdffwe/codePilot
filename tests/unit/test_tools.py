@@ -15,6 +15,8 @@ from codepilot.infrastructure.agent.tools import (
     TOOLS_BY_NAME,
     AskUserArgs,
     EditFileArgs,
+    GlobArgs,
+    GrepArgs,
     RunCommandArgs,
     RunDeps,
     WriteFileArgs,
@@ -71,6 +73,15 @@ def test_previews_render() -> None:
     run = TOOLS_BY_NAME["run_command"].metadata["preview"]
     assert run(RunCommandArgs(argv=["ls", "-l"])) == "执行命令：ls -l"
 
+    glob = TOOLS_BY_NAME["glob"].metadata["preview"]
+    assert glob(GlobArgs(pattern="**/*.py")) == "查找文件：**/*.py（在 . 下）"
+
+    grep = TOOLS_BY_NAME["grep"].metadata["preview"]
+    assert (
+        grep(GrepArgs(pattern="TODO", glob="**/*.py"))
+        == "搜索内容：TODO（在 . 下，文件过滤 **/*.py）"
+    )
+
 
 def test_ask_user_metadata_and_defaults() -> None:
     tool = TOOLS_BY_NAME["ask_user"]
@@ -95,6 +106,36 @@ async def test_read_file_executes(tmp_path: Path) -> None:
     assert msg.content == "hello"
     assert msg.name == "read_file"
     assert msg.tool_call_id == "c1"
+
+
+async def test_glob_tool_returns_paths(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "b.py").write_text("y = 2\n", encoding="utf-8")
+
+    msg = await _invoke("glob", {"pattern": "**/*.py"}, tmp_path)
+
+    assert msg.name == "glob"
+    assert msg.content.splitlines() == ["a.py", "src/b.py"]
+
+
+async def test_glob_tool_reports_truncation(tmp_path: Path) -> None:
+    for name in ("a.py", "b.py", "c.py"):
+        (tmp_path / name).write_text("", encoding="utf-8")
+
+    msg = await _invoke("glob", {"pattern": "*.py", "max_results": 1}, tmp_path)
+
+    assert msg.content.splitlines()[0] == "a.py"
+    assert "已显示前 1 个文件，共 3 个" in msg.content
+
+
+async def test_grep_tool_formats_matches(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("x = 1\nneedle = 2\n", encoding="utf-8")
+
+    msg = await _invoke("grep", {"pattern": "needle"}, tmp_path)
+
+    assert msg.name == "grep"
+    assert "a.py:2: needle = 2" in msg.content
 
 
 async def test_write_file_writes_and_creates_parent(tmp_path: Path) -> None:

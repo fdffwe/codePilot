@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -120,3 +121,143 @@ async def test_list_entries_missing_dir_raises(tmp_path: Path) -> None:
     ws = _workspace(tmp_path)
     with pytest.raises(NotFoundError):
         await ws.list_entries("nope")
+
+
+# --- glob ---
+
+
+async def test_glob_matches_recursive_and_skips_ignored(tmp_path: Path) -> None:
+    ws = _workspace(tmp_path)
+    for rel in (
+        "a.py",
+        "src/b.py",
+        "src/deep/c.py",
+        "node_modules/x.py",
+        ".git/y.py",
+        "README.md",
+    ):
+        await ws.write_text(rel, "")
+
+    result = await ws.glob("**/*.py")
+
+    assert result.paths == ("a.py", "src/b.py", "src/deep/c.py")
+    assert result.total == 3
+    assert not result.truncated
+
+
+async def test_glob_truncates_and_reports_total(tmp_path: Path) -> None:
+    ws = _workspace(tmp_path)
+    for name in ("a.py", "b.py", "c.py"):
+        await ws.write_text(name, "")
+
+    result = await ws.glob("*.py", max_results=2)
+
+    assert len(result.paths) == 2
+    assert result.total == 3
+    assert result.truncated
+
+
+async def test_glob_skips_symlinks(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    (outside / "secret.py").write_text("secret", encoding="utf-8")
+    try:
+        os.symlink(outside / "secret.py", root / "link.py")
+        os.symlink(outside, root / "linkdir")
+    except OSError:
+        pytest.skip("当前平台不支持创建符号链接")
+
+    result = await _workspace(root).glob("**/*.py")
+
+    assert result.paths == ()
+
+
+async def test_glob_empty_pattern_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError):
+        await _workspace(tmp_path).glob("  ")
+
+
+async def test_glob_pattern_without_slash_is_not_recursive(tmp_path: Path) -> None:
+    ws = _workspace(tmp_path)
+    await ws.write_text("a.py", "")
+    await ws.write_text("src/b.py", "")
+
+    result = await ws.glob("*.py")
+
+    assert result.paths == ("a.py",)
+
+
+async def test_glob_scopes_to_search_path(tmp_path: Path) -> None:
+    ws = _workspace(tmp_path)
+    await ws.write_text("a.py", "")
+    await ws.write_text("src/b.py", "")
+    await ws.write_text("src/deep/c.py", "")
+
+    result = await ws.glob("**/*.py", path="src")
+
+    # 模式相对搜索起点匹配，返回路径仍相对工作区根
+    assert result.paths == ("src/b.py", "src/deep/c.py")
+
+
+async def test_search_missing_path_raises(tmp_path: Path) -> None:
+    ws = _workspace(tmp_path)
+    with pytest.raises(NotFoundError):
+        await ws.glob("**/*.py", path="nope")
+    with pytest.raises(NotFoundError):
+        await ws.grep("x", path="nope")
+
+
+# --- grep ---
+
+
+async def test_grep_returns_path_line_and_text(tmp_path: Path) -> None:
+    ws = _workspace(tmp_path)
+    await ws.write_text("src/a.py", "x = 1\nneedle = 2\n")
+    await ws.write_text("b.py", "needle\n")
+
+    result = await ws.grep("needle")
+
+    assert [(m.path, m.line, m.text) for m in result.matches] == [
+        ("b.py", 1, "needle"),
+        ("src/a.py", 2, "needle = 2"),
+    ]
+    assert not result.truncated
+
+
+async def test_grep_respects_glob_and_ignored_dirs(tmp_path: Path) -> None:
+    ws = _workspace(tmp_path)
+    await ws.write_text("a.py", "needle\n")
+    await ws.write_text("a.txt", "needle\n")
+    await ws.write_text("node_modules/x.py", "needle\n")
+
+    result = await ws.grep("needle", glob="**/*.py")
+
+    assert [m.path for m in result.matches] == ["a.py"]
+
+
+async def test_grep_invalid_regex_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError):
+        await _workspace(tmp_path).grep("[")
+
+
+async def test_grep_skips_binary_and_reports_count(tmp_path: Path) -> None:
+    ws = _workspace(tmp_path)
+    (tmp_path / "bin.dat").write_bytes(b"needle\x00rest")
+    await ws.write_text("text.txt", "needle\n")
+
+    result = await ws.grep("needle")
+
+    assert [m.path for m in result.matches] == ["text.txt"]
+    assert result.skipped == 1
+
+
+async def test_grep_truncates(tmp_path: Path) -> None:
+    ws = _workspace(tmp_path)
+    await ws.write_text("a.txt", "\n".join(f"needle {i}" for i in range(5)))
+
+    result = await ws.grep("needle", max_results=2)
+
+    assert len(result.matches) == 2
+    assert result.truncated

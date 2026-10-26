@@ -64,6 +64,26 @@ class ListDirArgs(BaseModel):
     path: str = Field(default=".", description="相对工作区根目录的目录路径")
 
 
+class GlobArgs(BaseModel):
+    pattern: str = Field(
+        description="通配模式，匹配工作区相对路径，如 '**/*.py'、'src/**/*.ts'"
+    )
+    path: str = Field(default=".", description="搜索起始目录，相对工作区根目录")
+    max_results: int = Field(default=200, ge=1, le=1000, description="最多返回的文件数")
+
+
+class GrepArgs(BaseModel):
+    pattern: str = Field(description="Python 正则表达式，逐行匹配文件内容")
+    path: str = Field(default=".", description="搜索起始目录或文件")
+    glob: str | None = Field(
+        default=None, description="只搜索匹配该通配模式的文件，如 '**/*.py'"
+    )
+    case_sensitive: bool = Field(default=True, description="是否区分大小写")
+    max_results: int = Field(
+        default=100, ge=1, le=500, description="最多返回的匹配行数"
+    )
+
+
 class WriteFileArgs(BaseModel):
     path: str = Field(description="相对工作区根目录的文件路径")
     content: str = Field(description="写入的完整文件内容")
@@ -109,6 +129,56 @@ async def _list_dir(
 ) -> str:
     entries = await _deps(config).workspace.list_dir(path)
     return "\n".join(entries)
+
+
+async def _glob(
+    pattern: str,
+    path: str,
+    max_results: int,
+    config: Annotated[RunnableConfig, InjectedToolArg],
+) -> str:
+    result = await _deps(config).workspace.glob(pattern, path, max_results=max_results)
+    if not result.paths:
+        return f"未找到匹配 {pattern!r} 的文件。"
+    lines = list(result.paths)
+    if result.truncated:
+        lines.append(
+            f"[已显示前 {len(result.paths)} 个文件，共 {result.total} 个；"
+            "请缩小 pattern 或 path]"
+        )
+    return "\n".join(lines)
+
+
+async def _grep(
+    pattern: str,
+    path: str,
+    glob: str | None,
+    case_sensitive: bool,
+    max_results: int,
+    config: Annotated[RunnableConfig, InjectedToolArg],
+) -> str:
+    result = await _deps(config).workspace.grep(
+        pattern,
+        path,
+        glob=glob,
+        case_sensitive=case_sensitive,
+        max_results=max_results,
+    )
+    notes: list[str] = []
+    if result.truncated:
+        notes.append(
+            f"[已显示前 {len(result.matches)} 条匹配，可能还有更多；"
+            "请缩小 pattern/path/glob]"
+        )
+    if result.skipped:
+        notes.append(f"[已跳过 {result.skipped} 个二进制/超大/不可读文件]")
+    if not result.matches:
+        body = f"未找到匹配 {pattern!r} 的内容。"
+    else:
+        body = "\n".join(
+            f"{match.path}:{match.line}: {match.text}" for match in result.matches
+        )
+    return "\n".join([body, *notes])
 
 
 async def _write_file(
@@ -166,6 +236,15 @@ def _read_preview(args: ReadFileArgs) -> str:
 
 def _list_preview(args: ListDirArgs) -> str:
     return f"列出目录 {args.path}"
+
+
+def _glob_preview(args: GlobArgs) -> str:
+    return f"查找文件：{args.pattern}（在 {args.path} 下）"
+
+
+def _grep_preview(args: GrepArgs) -> str:
+    scope = f"，文件过滤 {args.glob}" if args.glob else ""
+    return f"搜索内容：{args.pattern}（在 {args.path} 下{scope}）"
 
 
 def _write_preview(args: WriteFileArgs) -> str:
@@ -231,6 +310,34 @@ list_dir = _make_tool(
     preview=_list_preview,
 )
 
+glob_files = _make_tool(
+    coroutine=_glob,
+    name="glob",
+    description=(
+        "按通配模式查找工作区内的文件，返回工作区相对路径。"
+        "pattern 支持 '**' 递归，如 '**/*.py'、'src/**/*.ts'；"
+        "默认跳过 .git、node_modules、构建产物等目录。"
+        "用于先定位文件，再配合 read_file/grep 查看内容。"
+    ),
+    args_schema=GlobArgs,
+    safety=ToolSafety.READ,
+    preview=_glob_preview,
+)
+
+grep = _make_tool(
+    coroutine=_grep,
+    name="grep",
+    description=(
+        "用正则表达式逐行搜索工作区内的文本文件，返回 '路径:行号: 内容'。"
+        "可用 glob 参数限定文件类型（如 '**/*.py'）；"
+        "默认跳过 .git、node_modules、二进制与超大文件。"
+        "结果超限时会显式提示截断，可缩小 pattern/path/glob 后重试。"
+    ),
+    args_schema=GrepArgs,
+    safety=ToolSafety.READ,
+    preview=_grep_preview,
+)
+
 write_file = _make_tool(
     coroutine=_write_file,
     name="write_file",
@@ -278,6 +385,8 @@ run_command = _make_tool(
 TOOLS: list[StructuredTool] = [
     read_file,
     list_dir,
+    glob_files,
+    grep,
     write_file,
     edit_file,
     ask_user,
