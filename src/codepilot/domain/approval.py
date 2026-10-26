@@ -22,6 +22,9 @@ from pathlib import PurePosixPath
 
 from codepilot.domain.enums import ToolSafety
 
+# 工作区内的权限配置；agent 不得修改，否则等同于自我提权
+PERMISSIONS_RELATIVE_PATH = ".codepilot/permissions.json"
+
 
 class ApprovalMode(StrEnum):
     """审批模式。默认 ``default``：读放行、写与执行询问。"""
@@ -113,6 +116,13 @@ class ApprovalPolicy:
             if denial is not None:
                 return PolicyDecision(Decision.DENY, "high", denial)
 
+        if safety is ToolSafety.WRITE and _is_protected_write(
+            str(args.get("path", ""))
+        ):
+            return PolicyDecision(
+                Decision.DENY, risk, "权限配置文件不允许由 agent 修改"
+            )
+
         for rule in self.rules:
             if rule.decision is Decision.DENY and rule.matches(tool, args):
                 return PolicyDecision(
@@ -123,8 +133,12 @@ class ApprovalPolicy:
             return PolicyDecision(Decision.ALLOW, risk, "本次会话已允许相同操作")
 
         for rule in self.rules:
-            if rule.decision is not Decision.DENY and rule.matches(tool, args):
-                return PolicyDecision(rule.decision, risk, rule.reason)
+            if rule.decision is Decision.DENY or not rule.matches(tool, args):
+                continue
+            if rule.decision is Decision.ALLOW and risk == "high":
+                # 白名单也不能让高危操作免确认；仍可被用户当场批准
+                return PolicyDecision(Decision.ASK, risk, "高风险操作仍需确认")
+            return PolicyDecision(rule.decision, risk, rule.reason)
 
         return PolicyDecision(_mode_decision(self.mode, safety), risk)
 
@@ -255,6 +269,9 @@ def _command_risk(argv: Sequence[str]) -> str:
 def _command_denial(argv: Sequence[str]) -> str | None:
     if not argv:
         return None
+    if any(PERMISSIONS_RELATIVE_PATH in str(arg) for arg in argv):
+        # 命令同样可能改写白名单（如 python -c / tee），一并禁止
+        return "禁止通过命令访问权限配置文件"
     exe = _executable(argv[0])
     if exe in _DENY_EXECUTABLES:
         return f"禁止执行高危命令：{exe}"
@@ -326,6 +343,16 @@ def _signature(tool: str, args: Mapping[str, object]) -> tuple[str, ...] | None:
         path = str(args.get("path", ""))
         return (tool, path) if path else None
     return None
+
+
+def _is_protected_write(path: str) -> bool:
+    """权限配置文件是本功能的信任根，任何模式/规则都不允许 agent 写入。"""
+    normalized = path.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized == PERMISSIONS_RELATIVE_PATH or normalized.endswith(
+        "/" + PERMISSIONS_RELATIVE_PATH
+    )
 
 
 def _match_path(path: str, pattern: str) -> bool:

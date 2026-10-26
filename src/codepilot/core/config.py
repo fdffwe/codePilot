@@ -60,6 +60,11 @@ class Settings(BaseSettings):
         return self.data_dir / "checkpoints.sqlite"
 
     @property
+    def permissions_path(self) -> Path:
+        """用户级权限白名单；工作区级文件由 agent 每次 run 自行读取。"""
+        return self.data_dir / "permissions.json"
+
+    @property
     def backups_dir(self) -> Path:
         return self.data_dir / "backups"
 

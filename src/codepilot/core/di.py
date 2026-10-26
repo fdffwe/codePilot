@@ -98,6 +98,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             command_timeout_s=settings.command_timeout_s,
             max_iterations=settings.agent_max_iterations,
             approval_policy=approval_policy,
+            permissions_path=settings.permissions_path,
         )
         bus = EventBus()
         chat_service = ChatService(

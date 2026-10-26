@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -36,6 +37,7 @@ def _orchestrator(
     root: Path,
     *,
     policy: ApprovalPolicy | None = None,
+    permissions_path: Path | None = None,
 ) -> LangGraphOrchestrator:
     return LangGraphOrchestrator(
         checkpointer=InMemorySaver(),
@@ -45,6 +47,7 @@ def _orchestrator(
         command_timeout_s=10,
         max_iterations=5,
         approval_policy=policy,
+        permissions_path=permissions_path,
     )
 
 
@@ -626,4 +629,136 @@ async def test_session_allowed_write_skips_prompt(tmp_path: Path) -> None:
     ]
     assert not any(isinstance(e, ApprovalRequiredEvent) for e in events)
     assert (tmp_path / "a.py").read_text(encoding="utf-8") == "x = 1\n"
+    assert isinstance(events[-1], RunFinishedEvent)
+
+
+async def test_workspace_permissions_allow_skips_prompt(tmp_path: Path) -> None:
+    config = tmp_path / ".codepilot"
+    config.mkdir()
+    (config / "permissions.json").write_text(
+        json.dumps({"permissions": {"allow": ["write_file(src/**)"]}}),
+        encoding="utf-8",
+    )
+    orch = _orchestrator(
+        [
+            _tool_call(
+                "write_file", {"path": "src/new.py", "content": "x = 1\n"}, "c1"
+            ),
+            AIMessage(content="写好了"),
+        ],
+        tmp_path,
+    )
+
+    events = [
+        ev
+        async for ev in orch.stream(
+            run_id="r19",
+            session_id="s1",
+            model="fake",
+            messages=[_user("写文件")],
+            workspace_path=str(tmp_path),
+        )
+    ]
+
+    assert not any(isinstance(e, ApprovalRequiredEvent) for e in events)
+    assert (tmp_path / "src" / "new.py").read_text(encoding="utf-8") == "x = 1\n"
+    assert isinstance(events[-1], RunFinishedEvent)
+
+
+async def test_user_permissions_file_allow_skips_prompt(tmp_path: Path) -> None:
+    permissions = tmp_path / "user-permissions.json"
+    permissions.write_text(
+        json.dumps({"permissions": {"allow": ["write_file(**)"]}}),
+        encoding="utf-8",
+    )
+    orch = _orchestrator(
+        [
+            _tool_call("write_file", {"path": "a.py", "content": "x"}, "c1"),
+            AIMessage(content="写好了"),
+        ],
+        tmp_path,
+        permissions_path=permissions,
+    )
+
+    events = [
+        ev
+        async for ev in orch.stream(
+            run_id="r20",
+            session_id="s1",
+            model="fake",
+            messages=[_user("写文件")],
+            workspace_path=str(tmp_path),
+        )
+    ]
+
+    assert not any(isinstance(e, ApprovalRequiredEvent) for e in events)
+    assert (tmp_path / "a.py").read_text(encoding="utf-8") == "x"
+
+
+async def test_high_risk_command_in_permissions_still_asks(tmp_path: Path) -> None:
+    config = tmp_path / ".codepilot"
+    config.mkdir()
+    (config / "permissions.json").write_text(
+        json.dumps({"permissions": {"allow": ["run_command(rm -rf:*)"]}}),
+        encoding="utf-8",
+    )
+    (tmp_path / "build").mkdir()
+    orch = _orchestrator(
+        [
+            _tool_call("run_command", {"argv": ["rm", "-rf", "build"]}, "c1"),
+            AIMessage(content="没删"),
+        ],
+        tmp_path,
+    )
+
+    first = [
+        ev
+        async for ev in orch.stream(
+            run_id="r21",
+            session_id="s1",
+            model="fake",
+            messages=[_user("清理")],
+            workspace_path=str(tmp_path),
+        )
+    ]
+    assert any(isinstance(e, ApprovalRequiredEvent) for e in first)
+    assert (tmp_path / "build").exists()
+
+    [ev async for ev in orch.resume("r21", approved=False)]
+    assert (tmp_path / "build").exists()
+
+
+async def test_agent_cannot_write_permissions_file(tmp_path: Path) -> None:
+    config = tmp_path / ".codepilot"
+    config.mkdir()
+    target = config / "permissions.json"
+    original = json.dumps({"permissions": {"allow": ["write_file(**)"]}})
+    target.write_text(original, encoding="utf-8")
+    orch = _orchestrator(
+        [
+            _tool_call(
+                "write_file",
+                {"path": ".codepilot/permissions.json", "content": "{}"},
+                "c1",
+            ),
+            AIMessage(content="改不了"),
+        ],
+        tmp_path,
+    )
+
+    events = [
+        ev
+        async for ev in orch.stream(
+            run_id="r22",
+            session_id="s1",
+            model="fake",
+            messages=[_user("改权限")],
+            workspace_path=str(tmp_path),
+        )
+    ]
+
+    assert not any(isinstance(e, ApprovalRequiredEvent) for e in events)
+    result = next(e for e in events if isinstance(e, ToolResultEvent))
+    assert not result.ok and "权限配置文件" in result.output
+    assert target.read_text(encoding="utf-8") == original
     assert isinstance(events[-1], RunFinishedEvent)

@@ -7,8 +7,10 @@ HITL：``approval`` 节点每次只处理一个交互并 ``interrupt()``，靠�
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -17,7 +19,12 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import Command, Interrupt
 
-from codepilot.domain.approval import ApprovalPolicy
+from codepilot.core.errors import DomainError, ValidationError
+from codepilot.domain.approval import (
+    PERMISSIONS_RELATIVE_PATH,
+    ApprovalPolicy,
+    ApprovalRule,
+)
 from codepilot.domain.entities import Approval, Message, Question, ToolCall
 from codepilot.domain.events import (
     AgentEvent,
@@ -35,6 +42,7 @@ from codepilot.infrastructure.agent.graph import build_graph
 from codepilot.infrastructure.agent.mappers import from_ai_message, to_lc_message
 from codepilot.infrastructure.agent.state import AgentState
 from codepilot.infrastructure.agent.tools import TOOLS, RunDeps
+from codepilot.infrastructure.permissions import load_rules_file, parse_permissions
 from codepilot.infrastructure.providers import ChatModelFactory
 
 _log = logging.getLogger(__name__)
@@ -64,6 +72,7 @@ class LangGraphOrchestrator:
         command_timeout_s: float,
         max_iterations: int,
         approval_policy: ApprovalPolicy | None = None,
+        permissions_path: Path | None = None,
         system_prompt: str = DEFAULT_SYSTEM_PROMPT,
     ) -> None:
         self._graph = build_graph().compile(checkpointer=checkpointer)
@@ -73,6 +82,7 @@ class LangGraphOrchestrator:
         self._command_timeout_s = command_timeout_s
         self._max_iterations = max_iterations
         self._approval_policy = approval_policy or ApprovalPolicy()
+        self._permissions_path = permissions_path
         self._system_prompt = system_prompt
         self._runs: dict[str, RunDeps] = {}
         self._session_ids: dict[str, str] = {}
@@ -89,7 +99,7 @@ class LangGraphOrchestrator:
         messages: Sequence[Message],
         workspace_path: str,
     ) -> AsyncIterator[AgentEvent]:
-        deps = self._make_deps(model, workspace_path, session_id)
+        deps = await self._make_deps(model, workspace_path, session_id)
         self._runs[run_id] = deps
         self._session_ids[run_id] = session_id
         self._seq[run_id] = 0
@@ -153,8 +163,16 @@ class LangGraphOrchestrator:
         """用户选择“本次会话允许”后，记住该操作以免再次询问。"""
         self._approval_policy.remember(session_id, tool, arguments)
 
-    def _make_deps(self, model: str, workspace_path: str, session_id: str) -> RunDeps:
+    async def _make_deps(
+        self, model: str, workspace_path: str, session_id: str
+    ) -> RunDeps:
         workspace = self._workspace_factory(workspace_path)
+        rules = await self._permission_rules(workspace)
+        policy = ApprovalPolicy(
+            mode=self._approval_policy.mode,
+            rules=rules + self._approval_policy.rules,
+            allowlist=self._approval_policy.allowlist,
+        )
         bound = self._model_factory(model).bind_tools(TOOLS)
         return RunDeps(
             workspace=workspace,
@@ -162,8 +180,29 @@ class LangGraphOrchestrator:
             model=bound,
             command_timeout_s=self._command_timeout_s,
             session_id=session_id,
-            policy=self._approval_policy,
+            policy=policy,
         )
+
+    async def _permission_rules(
+        self, workspace: WorkspaceProvider
+    ) -> tuple[ApprovalRule, ...]:
+        """合并工作区与用户级权限配置；工作区规则在前，改动下次 run 生效。"""
+        rules: tuple[ApprovalRule, ...] = ()
+        try:
+            raw = await workspace.read_text(PERMISSIONS_RELATIVE_PATH)
+        except DomainError:
+            raw = ""
+        if raw:
+            try:
+                rules = parse_permissions(raw)
+            except ValidationError as exc:
+                _log.warning(
+                    "workspace_permissions_invalid",
+                    extra={"workspace": str(workspace.root), "error": str(exc)},
+                )
+        if self._permissions_path is not None:
+            rules += await asyncio.to_thread(load_rules_file, self._permissions_path)
+        return rules
 
     def _prepare_input(self, messages: Sequence[Message]) -> list[AnyMessage]:
         prepared: list[AnyMessage] = [SystemMessage(content=self._system_prompt)]
