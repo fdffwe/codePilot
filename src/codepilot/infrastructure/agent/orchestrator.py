@@ -22,6 +22,7 @@ from langgraph.types import Command, Interrupt
 from codepilot.core.errors import DomainError, ValidationError
 from codepilot.domain.approval import (
     PERMISSIONS_RELATIVE_PATH,
+    ApprovalMode,
     ApprovalPolicy,
     ApprovalRule,
 )
@@ -162,6 +163,14 @@ class LangGraphOrchestrator:
     ) -> None:
         """用户选择“本次会话允许”后，记住该操作以免再次询问。"""
         self._approval_policy.remember(session_id, tool, arguments)
+
+    @property
+    def approval_mode(self) -> ApprovalMode:
+        return self._approval_policy.mode
+
+    def set_approval_mode(self, mode: ApprovalMode) -> None:
+        # 每次 run 都会基于当前模式复制一份策略，故只影响后续 run
+        self._approval_policy.mode = mode
 
     async def _make_deps(
         self, model: str, workspace_path: str, session_id: str

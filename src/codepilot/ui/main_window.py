@@ -25,7 +25,8 @@ from PySide6.QtWidgets import (
 
 from codepilot import __version__
 from codepilot.core.config import Settings
-from codepilot.domain.entities import Approval, Question, Session
+from codepilot.domain.entities import Approval, Message, Question, Session
+from codepilot.domain.enums import MessageRole
 from codepilot.ui.bridge import EventBridge
 from codepilot.ui.viewmodels import ChatViewModel
 from codepilot.ui.views import (
@@ -34,6 +35,7 @@ from codepilot.ui.views import (
     FileTreePanel,
     MainTabs,
     SessionSidebar,
+    SettingsPanel,
     TitleBar,
     Toast,
 )
@@ -79,6 +81,10 @@ class MainWindow(QMainWindow):
         self._pending_approvals: list[Approval] = []
         self._pending_question: Question | None = None
         self._option_buttons: list[QPushButton] = []
+        self._current_session: Session | None = None
+        self._approval_mode = settings.approval_mode.value
+        self._busy = False
+        self._history_pending = False
 
         self.setWindowTitle(f"{settings.app_name} {__version__}")
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
@@ -116,8 +122,14 @@ class MainWindow(QMainWindow):
         self._sidebar = SessionSidebar(self._side_stack)
         self._sessions = self._sidebar.sessions  # 供测试/兼容访问
         self._file_tree = FileTreePanel(self._side_stack)
+        self._settings_panel = SettingsPanel(
+            approval_mode=self._approval_mode,
+            user_permissions_path=str(self._settings.permissions_path),
+            parent=self._side_stack,
+        )
         self._side_stack.addWidget(self._sidebar)
         self._side_stack.addWidget(self._file_tree)
+        self._side_stack.addWidget(self._settings_panel)
         content.addWidget(self._side_stack, 0)
 
         # 右侧主区：对话 + 文件标签页
@@ -126,9 +138,7 @@ class MainWindow(QMainWindow):
         outer.addLayout(content, 1)
 
         self.statusBar().setSizeGripEnabled(False)
-        self.statusBar().showMessage(
-            f"数据目录：{self._settings.data_dir}  |  模型：{self._settings.llm_model}"
-        )
+        self._update_status()
 
         self._toast = Toast(self._root)
 
@@ -240,17 +250,27 @@ class MainWindow(QMainWindow):
 
         self._file_tree.directoryExpandRequested.connect(self._vm.list_workspace_dir)
         self._file_tree.fileActivated.connect(self._vm.read_workspace_file)
+        self._file_tree.refreshRequested.connect(self._refresh_file_tree)
+
+        self._settings_panel.modeChanged.connect(self._vm.set_approval_mode)
+        self._settings_panel.editPermissionsRequested.connect(
+            self._vm.open_workspace_permissions
+        )
 
         self._vm.sessionsChanged.connect(self._on_sessions_changed)
+        self._vm.sessionOpened.connect(self._on_session_opened)
+        self._vm.historyLoaded.connect(self._on_history_loaded)
         self._vm.errorOccurred.connect(self._on_error)
         self._vm.busyChanged.connect(self._on_busy)
+        self._vm.approvalModeChanged.connect(self._on_approval_mode_changed)
         self._vm.workspaceEntriesLoaded.connect(self._file_tree.set_entries)
         self._vm.workspaceFileLoaded.connect(self._open_file_tab)
         self._vm.workspaceFileSaved.connect(self._tabs.mark_saved)
+        self._vm.permissionsLoaded.connect(self._on_permissions_loaded)
 
         self._bridge.messageReceived.connect(lambda t: self._append("助手", t))
         self._bridge.toolCalled.connect(
-            lambda name, args: self._append("工具", f"{name} {args}")
+            lambda name, args: self._append("工具", f"{name}  {args}")
         )
         self._bridge.toolResult.connect(self._on_tool_result)
         self._bridge.approvalRequested.connect(self._on_approval)
@@ -274,17 +294,53 @@ class MainWindow(QMainWindow):
 
     def _on_session_clicked(self, session: Session) -> None:
         self._vm.open_session(session)
-        self._file_tree.reset(session.title)
+
+    def _on_session_opened(self, session: Session) -> None:
+        self._current_session = session
+        self._history_pending = True
+        self._settings_panel.set_session(session)
+        self._sidebar.select_session(session.id)
+        self._file_tree.reset(session.title)  # 展开根节点即触发目录加载
         self._side_stack.setCurrentIndex(1)  # 切到文件面板
         self._activity.set_current(1)
         self._tabs.show_chat()
-        self._append("系统", f"已打开会话：{session.title}（{session.workspace_path}）")
+        self._chat.clear()
+        self._update_status()
+
+    def _on_history_loaded(self, session_id: str, messages: list[Message]) -> None:
+        if not self._history_pending or self._current_session is None:
+            return
+        if self._current_session.id != session_id:
+            return
+        self._history_pending = False
+        self._chat.clear()
+        for message in messages:
+            if not message.content.strip():
+                continue
+            who = "我" if message.role is MessageRole.USER else "助手"
+            self._chat.add_message(who, message.content)
 
     def _on_sessions_changed(self, sessions: list[Session]) -> None:
         self._sidebar.set_sessions(sessions)
+        if self._current_session is not None:
+            self._sidebar.select_session(self._current_session.id)
 
     def _on_tool_result(self, output: str, ok: bool) -> None:
         self._append("输出" if ok else "输出(失败)", output)
+
+    def _on_approval_mode_changed(self, mode: str) -> None:
+        self._approval_mode = mode
+        self._update_status()
+        self._notify("审批模式已切换", f"当前为 {mode}，下一轮对话生效")
+
+    def _on_permissions_loaded(self, path: str, content: str) -> None:
+        self._tabs.open_file(path, content)
+        self._notify("工作区白名单", "修改后按 Ctrl+S 保存，下一轮对话生效")
+
+    def _refresh_file_tree(self) -> None:
+        if self._current_session is None:
+            return
+        self._file_tree.reset(self._current_session.title)
 
     def _on_approval(self, approval: Approval) -> None:
         self._show_approvals([approval])
@@ -390,6 +446,8 @@ class MainWindow(QMainWindow):
         self._approval_remember.setChecked(False)
         self._approval_box.setVisible(False)
         self._question_box.setVisible(False)
+        # agent 可能改过文件，刷新文件树让磁盘状态可见
+        self._refresh_file_tree()
         self._notify("agent 已停止", f"本轮工作结束（共 {iterations} 轮）")
 
     def _on_agent_error(self, message: str) -> None:
@@ -414,8 +472,24 @@ class MainWindow(QMainWindow):
             toast.reposition()
 
     def _on_busy(self, busy: bool) -> None:
+        self._busy = busy
         self._chat.set_busy(busy)
-        self.statusBar().showMessage("运行中…" if busy else "就绪")
+        self._update_status()
+
+    def _update_status(self) -> None:
+        """状态栏常显工作区/模型/审批模式，运行时加“运行中”前缀。"""
+        parts: list[str] = []
+        if self._busy:
+            parts.append("运行中…")
+        if self._current_session is None:
+            parts.append(f"数据目录：{self._settings.data_dir}")
+            model = self._settings.llm_model
+        else:
+            parts.append(f"工作区：{self._current_session.workspace_path}")
+            model = self._current_session.model
+        parts.append(f"模型：{model}")
+        parts.append(f"审批：{self._approval_mode}")
+        self.statusBar().showMessage("  |  ".join(parts))
 
     def _on_error(self, message: str) -> None:
         self._append("错误", message)

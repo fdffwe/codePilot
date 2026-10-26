@@ -13,17 +13,25 @@ from PySide6.QtCore import QObject, Signal
 
 from codepilot.application.chat_service import ChatService
 from codepilot.core.errors import DomainError
+from codepilot.domain.approval import PERMISSIONS_RELATIVE_PATH, ApprovalMode
 from codepilot.domain.entities import Question, Session
+
+_PERMISSIONS_TEMPLATE = (
+    '{\n  "permissions": {\n    "allow": [],\n    "ask": [],\n    "deny": []\n  }\n}\n'
+)
 
 
 class ChatViewModel(QObject):
     sessionsChanged = Signal(list)
     sessionOpened = Signal(object)  # Session
+    historyLoaded = Signal(str, list)  # session_id, list[Message]
     errorOccurred = Signal(str)
     busyChanged = Signal(bool)
+    approvalModeChanged = Signal(str)  # ApprovalMode.value
     workspaceEntriesLoaded = Signal(str, list)  # path, list[WorkspaceEntry]
     workspaceFileLoaded = Signal(str, str)  # path, content
     workspaceFileSaved = Signal(str)  # path
+    permissionsLoaded = Signal(str, str)  # relative path, content
 
     def __init__(self, service: ChatService) -> None:
         super().__init__()
@@ -49,6 +57,21 @@ class ChatViewModel(QObject):
     def open_session(self, session: Session) -> None:
         self._current = session
         self.sessionOpened.emit(session)
+        self._spawn(self._load_history(session))
+
+    def set_approval_mode(self, mode: str) -> None:
+        try:
+            self._service.set_approval_mode(ApprovalMode(mode))
+        except (ValueError, DomainError) as exc:
+            self.errorOccurred.emit(str(exc))
+            return
+        self.approvalModeChanged.emit(mode)
+
+    def open_workspace_permissions(self) -> None:
+        if self._current is None:
+            self.errorOccurred.emit("请先新建或选择一个会话。")
+            return
+        self._spawn(self._load_permissions(self._current))
 
     def send(self, text: str) -> None:
         if self._current is None:
@@ -90,6 +113,28 @@ class ChatViewModel(QObject):
 
     async def _load_sessions(self) -> None:
         self.sessionsChanged.emit(await self._service.list_sessions())
+
+    async def _load_history(self, session: Session) -> None:
+        try:
+            messages = await self._service.list_messages(session.id)
+        except DomainError as exc:
+            self.errorOccurred.emit(str(exc))
+            return
+        # 加载期间用户可能切到别的会话，过期结果直接丢弃
+        if self._current is not None and self._current.id == session.id:
+            self.historyLoaded.emit(session.id, messages)
+
+    async def _load_permissions(self, session: Session) -> None:
+        try:
+            content = await self._service.read_workspace_permissions(session.id)
+        except DomainError as exc:
+            self.errorOccurred.emit(str(exc))
+            return
+        if self._current is None or self._current.id != session.id:
+            return
+        self.permissionsLoaded.emit(
+            PERMISSIONS_RELATIVE_PATH, content.strip() or _PERMISSIONS_TEMPLATE
+        )
 
     async def _create_session(self, workspace_path: str) -> None:
         try:

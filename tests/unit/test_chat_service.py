@@ -17,6 +17,7 @@ from codepilot.core.errors import (
     PermissionDeniedError,
     ValidationError,
 )
+from codepilot.domain.approval import ApprovalMode
 from codepilot.domain.entities import Approval, Message, Question, Session, ToolCall
 from codepilot.domain.enums import MessageRole
 from codepilot.domain.events import (
@@ -84,6 +85,10 @@ class FakeOrchestrator:
         self.resumed: list[tuple[str, bool]] = []
         self.answered: list[tuple[str, str]] = []
         self.remembered: list[tuple[str, str, dict[str, object]]] = []
+        self.approval_mode = ApprovalMode.DEFAULT
+
+    def set_approval_mode(self, mode: ApprovalMode) -> None:
+        self.approval_mode = mode
 
     def _bind(self, event: AgentEvent, run_id: str, session_id: str) -> AgentEvent:
         if isinstance(event, ApprovalRequiredEvent):
@@ -390,6 +395,25 @@ async def test_resolve_unknown_approval_raises(tmp_path: Path) -> None:
         await service.resolve_approval("nope", approved=True)
 
 
+async def test_list_messages_returns_history(tmp_path: Path) -> None:
+    service, messages, _, _ = _service(FakeOrchestrator([], []), allowlist=[tmp_path])
+    session = await service.create_session(workspace_path=tmp_path)
+    await messages.append(session.id, Message(role=MessageRole.USER, content="hi"))
+
+    history = await service.list_messages(session.id)
+
+    assert [(m.role, m.content) for m in history] == [(MessageRole.USER, "hi")]
+
+
+async def test_approval_mode_reads_and_delegates(tmp_path: Path) -> None:
+    orchestrator = FakeOrchestrator([], [])
+    service, _, _, _ = _service(orchestrator, allowlist=[tmp_path])
+
+    assert service.approval_mode is ApprovalMode.DEFAULT
+    service.set_approval_mode(ApprovalMode.YOLO)
+    assert orchestrator.approval_mode is ApprovalMode.YOLO
+
+
 async def test_workspace_listing_and_reading_via_factory(tmp_path: Path) -> None:
     from codepilot.infrastructure.workspace import LocalDirectWorkspace
 
@@ -415,6 +439,12 @@ async def test_workspace_listing_and_reading_via_factory(tmp_path: Path) -> None
 
     await service.write_workspace_file(session.id, "a.txt", "改动")
     assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "改动"
+
+    # 白名单文件缺失时返回空串，存在时返回原文
+    assert await service.read_workspace_permissions(session.id) == ""
+    (tmp_path / ".codepilot").mkdir()
+    (tmp_path / ".codepilot" / "permissions.json").write_text("{}", encoding="utf-8")
+    assert await service.read_workspace_permissions(session.id) == "{}"
 
 
 async def test_workspace_methods_require_factory(tmp_path: Path) -> None:

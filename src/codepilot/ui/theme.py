@@ -170,6 +170,41 @@ def build_stylesheet() -> str:
     #FileTree::item:hover {{ background: {PRIMARY_SOFT}; }}
     #FileTree::item:selected {{ background: {PRIMARY}; color: #FFFFFF; }}
 
+    #SidebarAction {{
+        background: transparent;
+        border: none;
+        border-radius: 4px;
+        color: {MUTED};
+        font-size: 14px;
+        min-width: 22px;
+        min-height: 22px;
+    }}
+    #SidebarAction:hover {{ background: {PRIMARY_SOFT}; color: {TEXT}; }}
+
+    /* --- 设置面板 --- */
+    #Settings, #SettingsScroll, #SettingsBody {{ background: #F3EFE8; border: none; }}
+    #SettingsSection {{ color: {TEXT}; font-weight: 600; }}
+    #SettingsHint {{ color: {MUTED}; font-size: 12px; }}
+    #SettingsPath {{
+        color: {MUTED};
+        font-family: {_MONO};
+        font-size: 11px;
+    }}
+    #SettingsValue {{ color: {TEXT}; font-size: 12px; }}
+    #SettingsCombo {{
+        background: {CARD};
+        border: 1px solid {BORDER};
+        border-radius: 6px;
+        padding: 5px 8px;
+    }}
+    #SettingsCombo:focus {{ border-color: {PRIMARY}; }}
+    #SettingsCombo QAbstractItemView {{
+        background: {CARD};
+        border: 1px solid {BORDER};
+        selection-background-color: {PRIMARY};
+        selection-color: #FFFFFF;
+    }}
+
     /* --- 确认卡片 --- */
     #ApprovalCard {{
         background: {CARD};

@@ -139,3 +139,12 @@ class SessionSidebar(QWidget):
             item = QListWidgetItem(session.title)
             item.setData(Qt.ItemDataRole.UserRole, session)
             self._sessions.addItem(item)
+
+    def select_session(self, session_id: str) -> None:
+        """按 id 选中会话（列表刷新后恢复高亮）。"""
+        for index in range(self._sessions.count()):
+            item = self._sessions.item(index)
+            session = item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(session, Session) and session.id == session_id:
+                self._sessions.setCurrentItem(item)
+                return

@@ -67,3 +67,14 @@ def test_expanding_dir_requests_its_path(qtbot) -> None:
     panel._on_expanded(panel._tree.topLevelItem(0).child(0))
 
     assert expanded == ["src"]
+
+
+def test_refresh_button_emits(qtbot) -> None:
+    panel = FileTreePanel()
+    qtbot.addWidget(panel)
+    seen: list[bool] = []
+    panel.refreshRequested.connect(lambda: seen.append(True))
+
+    panel._refresh.click()
+
+    assert seen == [True]

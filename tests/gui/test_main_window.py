@@ -8,7 +8,9 @@ import pytest
 
 from codepilot.application.event_bus import EventBus
 from codepilot.core.config import Settings
-from codepilot.domain.entities import Approval, Question, Session
+from codepilot.domain.approval import ApprovalMode
+from codepilot.domain.entities import Approval, Message, Question, Session
+from codepilot.domain.enums import MessageRole
 from codepilot.ui.bridge import EventBridge
 from codepilot.ui.main_window import MainWindow
 from codepilot.ui.viewmodels import ChatViewModel
@@ -21,12 +23,27 @@ class StubChatService:
     def __init__(self, sessions: list[Session]) -> None:
         self._sessions = sessions
         self.answered: list[tuple[str, str, str]] = []
+        self.history: dict[str, list[Message]] = {}
+        self.permissions = ""
+        self.approval_mode = ApprovalMode.DEFAULT
 
     async def list_sessions(self) -> list[Session]:
         return list(self._sessions)
 
+    async def list_messages(self, session_id: str) -> list[Message]:
+        return list(self.history.get(session_id, []))
+
     async def answer_question(self, session_id: str, run_id: str, text: str) -> None:
         self.answered.append((session_id, run_id, text))
+
+    async def list_workspace_entries(self, session_id: str, path: str = ".") -> list:
+        return []
+
+    async def read_workspace_permissions(self, session_id: str) -> str:
+        return self.permissions
+
+    def set_approval_mode(self, mode: ApprovalMode) -> None:
+        self.approval_mode = mode
 
 
 @pytest.mark.asyncio
@@ -197,3 +214,79 @@ def test_toast_auto_hides(qtbot) -> None:
 
     qtbot.wait(100)
     assert toast.isHidden()
+
+
+@pytest.mark.asyncio
+async def test_opening_session_renders_history(qtbot, tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path / ".codepilot")
+    session = Session(id="s1", title="历史", workspace_path=str(tmp_path), model="m")
+    service = StubChatService([session])
+    service.history[session.id] = [
+        Message(role=MessageRole.USER, content="第一句"),
+        Message(role=MessageRole.ASSISTANT, content="第二句"),
+    ]
+    window = MainWindow(settings, ChatViewModel(service), EventBridge(EventBus()))  # type: ignore[arg-type]
+    qtbot.addWidget(window)
+
+    window._on_session_clicked(session)
+    await asyncio.sleep(0)
+
+    assert window._current_session is session
+    assert window._chat._hint is None
+    # 两个气泡 + 尾部 stretch
+    assert window._chat._messages.count() == 3
+    assert window._sidebar._sessions.currentItem() is not None
+
+
+@pytest.mark.asyncio
+async def test_history_for_other_session_is_ignored(qtbot, tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path / ".codepilot")
+    session = Session(id="s1", title="历史", workspace_path=str(tmp_path), model="m")
+    window = MainWindow(
+        settings, ChatViewModel(StubChatService([session])), EventBridge(EventBus())  # type: ignore[arg-type]
+    )
+    qtbot.addWidget(window)
+
+    window._on_session_opened(session)
+    await asyncio.sleep(0)
+    window._on_history_loaded(
+        "other", [Message(role=MessageRole.USER, content="不该出现")]
+    )
+
+    assert window._chat._hint is not None
+
+
+@pytest.mark.asyncio
+async def test_approval_mode_switch_updates_status(qtbot, tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path / ".codepilot")
+    service = StubChatService([])
+    window = MainWindow(
+        settings, ChatViewModel(service), EventBridge(EventBus())  # type: ignore[arg-type]
+    )
+    qtbot.addWidget(window)
+
+    auto_edit = next(
+        i
+        for i in range(window._settings_panel._mode.count())
+        if window._settings_panel._mode.itemData(i) == "auto-edit"
+    )
+    window._settings_panel._mode.setCurrentIndex(auto_edit)
+
+    assert service.approval_mode is ApprovalMode.AUTO_EDIT
+    assert window._approval_mode == "auto-edit"
+    assert "auto-edit" in window.statusBar().currentMessage()
+
+
+@pytest.mark.asyncio
+async def test_permissions_loaded_opens_editor_tab(qtbot, tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path / ".codepilot")
+    window = MainWindow(
+        settings, ChatViewModel(StubChatService([])), EventBridge(EventBus())  # type: ignore[arg-type]
+    )
+    qtbot.addWidget(window)
+
+    window._on_permissions_loaded(".codepilot/permissions.json", '{"permissions": {}}')
+
+    assert window._tabs.count() == 2
+    editor = window._tabs._editors[".codepilot/permissions.json"]
+    assert editor.toPlainText() == '{"permissions": {}}'

@@ -762,3 +762,33 @@ async def test_agent_cannot_write_permissions_file(tmp_path: Path) -> None:
     assert not result.ok and "权限配置文件" in result.output
     assert target.read_text(encoding="utf-8") == original
     assert isinstance(events[-1], RunFinishedEvent)
+
+
+async def test_approval_mode_can_be_switched_at_runtime(tmp_path: Path) -> None:
+    orch = _orchestrator(
+        [
+            _tool_call("write_file", {"path": "auto.py", "content": "x = 1\n"}, "c1"),
+            AIMessage(content="已写入"),
+        ],
+        tmp_path,
+    )
+    assert orch.approval_mode is ApprovalMode.DEFAULT
+
+    orch.set_approval_mode(ApprovalMode.AUTO_EDIT)
+    events = [
+        ev
+        async for ev in orch.stream(
+            run_id="r-mode",
+            session_id="s1",
+            model="fake",
+            messages=[_user("写个文件")],
+            workspace_path=str(tmp_path),
+        )
+    ]
+
+    assert orch.approval_mode is ApprovalMode.AUTO_EDIT
+    assert not any(
+        isinstance(e, (ApprovalRequiredEvent, ApprovalsRequiredEvent)) for e in events
+    )
+    assert (tmp_path / "auto.py").read_text(encoding="utf-8") == "x = 1\n"
+    assert isinstance(events[-1], RunFinishedEvent)

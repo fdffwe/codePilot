@@ -9,12 +9,22 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Protocol, runtime_checkable
 
+from codepilot.domain.approval import ApprovalMode
 from codepilot.domain.entities import Message
 from codepilot.domain.events import AgentEvent
 
 
 @runtime_checkable
 class AgentOrchestrator(Protocol):
+    @property
+    def approval_mode(self) -> ApprovalMode:
+        """当前审批模式。"""
+        ...
+
+    def set_approval_mode(self, mode: ApprovalMode) -> None:
+        """切换审批模式；只影响后续 run。"""
+        ...
+
     def stream(
         self,
         *,

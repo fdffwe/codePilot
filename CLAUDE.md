@@ -58,7 +58,7 @@ ui ─▶ application ─▶ domain ◀─ infrastructure（实现 domain 的 po
 2. **用例 → Agent**：`application/chat_service.py` 调 `AgentOrchestrator.stream()`，逐条消费领域事件 `domain/events.py`（`Message/ToolCall/ToolResult/ApprovalRequired/ApprovalsRequired/QuestionRequired/RunFinished/Error`），落库消息与审批（提问不落库）。
 3. **框架隔离**：`infrastructure/agent/orchestrator.py`（`LangGraphOrchestrator`）实现 `AgentOrchestrator` 端口，把 LangGraph 的 `astream(updates)` 转译成领域事件，框架类型不外泄（映射层 `mappers.py`）。
 4. **事件回 UI**：`application/event_bus.py`（同步进程内总线）→ `ui/bridge.py::EventBridge` 把事件转成 Qt Signal；`ui/app.py` 用 **qasync** 融合 asyncio 与 Qt 事件循环。总线上有两类事件：Agent 事件（`domain/events.py`）与应用编排事件（`application/events.py`，如 `SessionCreated/RunStarted`）。
-5. **GUI 组成**：`ui/main_window.py` 只装配视图与转发，不写业务；布局为 `TitleBar + SessionSidebar + ActivityBar + MainTabs`（文件树 / 代码编辑器 / 对话）+ `Toast`。`ui/viewmodels/chat_viewmodel.py` 是唯一调用 `ChatService` 并暴露 Qt Signal 的入口。
+5. **GUI 组成**：`ui/main_window.py` 只装配视图与转发，不写业务；布局为 `TitleBar + SessionSidebar + ActivityBar + MainTabs`（文件树 / 代码编辑器 / 对话）+ `Toast`。活动栏第三个面板是 `SettingsPanel`：运行期切换审批模式、在工作区编辑器中打开 `.codepilot/permissions.json`、展示当前会话与模型。切换会话时 `ChatViewModel` 异步加载历史消息回填对话区；状态栏常显工作区、模型、审批模式与运行状态。`ui/viewmodels/chat_viewmodel.py` 是唯一调用 `ChatService` 并暴露 Qt Signal 的入口。
 
 ### Agent 引擎（仅存在于 `infrastructure/agent/`）
 

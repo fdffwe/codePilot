@@ -38,15 +38,8 @@ class ChatView(QWidget):
         self._messages = QVBoxLayout(self._container)
         self._messages.setContentsMargins(18, 16, 18, 16)
         self._messages.setSpacing(12)
-        self._messages.addStretch(1)  # 前导 stretch，有消息后移除
-        self._hint: QLabel | None = QLabel(
-            "选择左侧会话，或点「＋ 新建会话」绑定一个工作目录开始", self._container
-        )
-        self._hint.setObjectName("EmptyHint")
-        self._hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._hint.setWordWrap(True)
-        self._messages.addWidget(self._hint)
-        self._messages.addStretch(1)
+        self._hint: QLabel | None = None
+        self._show_empty_state()
         self._scroll.setWidget(self._container)
         layout.addWidget(self._scroll, 1)
 
@@ -68,6 +61,17 @@ class ChatView(QWidget):
 
     # --- 对外槽 ---
 
+    def clear(self) -> None:
+        """清空对话区并恢复空状态提示（切换会话时回填历史前调用）。"""
+        while self._messages.count():
+            item = self._messages.takeAt(0)
+            widget = item.widget() if item is not None else None
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        self._hint = None
+        self._show_empty_state()
+
     def add_message(self, who: str, text: str) -> None:
         self._clear_empty_state()
         bubble = MessageBubble(who, text, self._container)
@@ -88,6 +92,18 @@ class ChatView(QWidget):
         self._input.setEnabled(not busy)
 
     # --- 内部 ---
+
+    def _show_empty_state(self) -> None:
+        self._messages.addStretch(1)  # 前导 stretch，有消息后移除
+        hint = QLabel(
+            "选择左侧会话，或点「＋ 新建会话」绑定一个工作目录开始", self._container
+        )
+        hint.setObjectName("EmptyHint")
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint.setWordWrap(True)
+        self._hint = hint
+        self._messages.addWidget(hint)
+        self._messages.addStretch(1)
 
     def _clear_empty_state(self) -> None:
         if self._hint is None:

@@ -7,7 +7,9 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QHBoxLayout,
     QLabel,
+    QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -22,6 +24,7 @@ _PATH_ROLE = Qt.ItemDataRole.UserRole
 class FileTreePanel(QWidget):
     directoryExpandRequested = Signal(str)  # 工作区相对目录路径
     fileActivated = Signal(str)  # 工作区相对文件路径
+    refreshRequested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -34,9 +37,20 @@ class FileTreePanel(QWidget):
         layout.setContentsMargins(0, 14, 12, 12)
         layout.setSpacing(10)
 
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
         title = QLabel("文件", self)
         title.setObjectName("SidebarTitle")
-        layout.addWidget(title)
+        self._refresh = QToolButton(self)
+        self._refresh.setObjectName("SidebarAction")
+        self._refresh.setText("⟳")
+        self._refresh.setToolTip("刷新文件树")
+        self._refresh.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._refresh.clicked.connect(self.refreshRequested.emit)
+        header.addWidget(title)
+        header.addStretch(1)
+        header.addWidget(self._refresh)
+        layout.addLayout(header)
 
         self._tree = QTreeWidget(self)
         self._tree.setObjectName("FileTree")

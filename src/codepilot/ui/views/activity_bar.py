@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 _ITEMS: tuple[tuple[str, str], ...] = (
     ("☰", "会话"),
     ("▤", "文件"),
+    ("⚙", "设置"),
 )
 
 

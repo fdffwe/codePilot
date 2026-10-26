@@ -6,6 +6,7 @@ from codepilot.ui.views.code_editor import CodeEditor
 from codepilot.ui.views.file_tree import FileTreePanel
 from codepilot.ui.views.main_tabs import MainTabs
 from codepilot.ui.views.message_bubble import CodeBlock, MessageBubble
+from codepilot.ui.views.settings_panel import SettingsPanel
 from codepilot.ui.views.sidebar import SessionSidebar
 from codepilot.ui.views.title_bar import TitleBar
 from codepilot.ui.views.toast import Toast
@@ -19,6 +20,7 @@ __all__ = [
     "MainTabs",
     "MessageBubble",
     "SessionSidebar",
+    "SettingsPanel",
     "TitleBar",
     "Toast",
 ]

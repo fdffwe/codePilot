@@ -13,6 +13,7 @@ from codepilot.application.event_bus import EventBus
 from codepilot.application.events import RunStarted, SessionCreated
 from codepilot.core.errors import DomainError, NotFoundError, ValidationError
 from codepilot.core.paths import ensure_allowed
+from codepilot.domain.approval import PERMISSIONS_RELATIVE_PATH, ApprovalMode
 from codepilot.domain.entities import Message, Session, WorkspaceEntry
 from codepilot.domain.enums import MessageRole
 from codepilot.domain.events import (
@@ -55,6 +56,19 @@ class ChatService:
 
     async def list_sessions(self) -> list[Session]:
         return await self._sessions.list()
+
+    async def list_messages(self, session_id: str) -> list[Message]:
+        """会话的历史消息（切换会话时供 GUI 回填）。"""
+        await self._require_session(session_id)
+        return await self._messages.list(session_id)
+
+    @property
+    def approval_mode(self) -> ApprovalMode:
+        return self._orchestrator.approval_mode
+
+    def set_approval_mode(self, mode: ApprovalMode) -> None:
+        """切换审批模式；进行中的 run 保持原决策，下一轮生效。"""
+        self._orchestrator.set_approval_mode(mode)
 
     async def create_session(
         self,
@@ -154,6 +168,14 @@ class ChatService:
         """读取会话工作区内的文件内容（供预览）。"""
         workspace = self._workspace_for(await self._require_session(session_id))
         return await workspace.read_text(path)
+
+    async def read_workspace_permissions(self, session_id: str) -> str:
+        """读取工作区级权限配置；文件不存在时返回空串（GUI 可展示模板）。"""
+        workspace = self._workspace_for(await self._require_session(session_id))
+        try:
+            return await workspace.read_text(PERMISSIONS_RELATIVE_PATH)
+        except NotFoundError:
+            return ""
 
     async def write_workspace_file(
         self, session_id: str, path: str, content: str
