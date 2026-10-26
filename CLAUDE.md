@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 codePilot 是**本地单机原生桌面** AI 编码助手（PySide6 + SQLite），形态对标 Claude Code：用户在 GUI 里绑定一个本机目录，用自然语言驱动 AI 读写该目录的真实文件、执行本机命令，写/执行前强制人工确认。**单进程、单用户、无 HTTP/服务端/多租户**。
 
-权威文档在 `docs/`：`REQUIREMENTS.md`（需求）、`TECHNICAL_DESIGN.md`（架构与 ADR，§16 决策表）、`ENGINEERING_PLAN.md`（P0–P5 里程碑与技术债）、`DEVELOPMENT_GUIDELINES.md`（**硬性规范，改动前必读**）。文档为中文，代码注释/提交信息也用中文。
+权威文档在 `docs/`：`REQUIREMENTS.md`（需求）、`TECHNICAL_DESIGN.md`（架构与 ADR，§16 决策表）、`ENGINEERING_PLAN.md`（P0–P5 里程碑与技术债）、`DEVELOPMENT_GUIDELINES.md`（**硬性规范，改动前必读**）、`TOOL_LAYER_ANALYSIS.md`（工具层设计与演进分析）。文档为中文，代码注释/提交信息也用中文。
 
 ## 常用命令
 
@@ -29,6 +29,10 @@ uv run alembic upgrade head
 
 uv run pyinstaller packaging/codepilot.spec --noconfirm   # 打包到 dist/
 ```
+
+首次运行需在仓库根建 `.env` 并写入 `CODEPILOT_LLM_API_KEY=...`（缺失时 `build_container` 直接抛错、应用弹窗退出）。模型与地址可用 `CODEPILOT_LLM_MODEL` / `CODEPILOT_LLM_BASE_URL` 覆盖，默认 `deepseek-chat` + `https://api.deepseek.com`。
+
+运行时数据（SQLite 库、LangGraph checkpoints、日志）默认在 `~/.codepilot/`，可用 `CODEPILOT_DATA_DIR` 改；排查持久化/恢复问题先看这里。数据库迁移在 `migrations/versions/`，应用启动时自动 `upgrade head`。
 
 `tests/conftest.py` 在导入 Qt 前把 `QT_QPA_PLATFORM=offscreen`，GUI 测试可无头运行。
 
@@ -53,7 +57,8 @@ ui ─▶ application ─▶ domain ◀─ infrastructure（实现 domain 的 po
 1. **GUI → 用例**：`ui/viewmodels/chat_viewmodel.py` 持有 `ChatService`，用 `asyncio.ensure_future` 拉起协程并把结果转成 Qt Signal；Widget 只连信号、不写业务逻辑。
 2. **用例 → Agent**：`application/chat_service.py` 调 `AgentOrchestrator.stream()`，逐条消费领域事件 `domain/events.py`（`Message/ToolCall/ToolResult/ApprovalRequired/QuestionRequired/RunFinished/Error`），落库消息与审批（提问不落库）。
 3. **框架隔离**：`infrastructure/agent/orchestrator.py`（`LangGraphOrchestrator`）实现 `AgentOrchestrator` 端口，把 LangGraph 的 `astream(updates)` 转译成领域事件，框架类型不外泄（映射层 `mappers.py`）。
-4. **事件回 UI**：`application/event_bus.py`（同步进程内总线）→ `ui/bridge.py::EventBridge` 把事件转成 Qt Signal；`ui/app.py` 用 **qasync** 融合 asyncio 与 Qt 事件循环。
+4. **事件回 UI**：`application/event_bus.py`（同步进程内总线）→ `ui/bridge.py::EventBridge` 把事件转成 Qt Signal；`ui/app.py` 用 **qasync** 融合 asyncio 与 Qt 事件循环。总线上有两类事件：Agent 事件（`domain/events.py`）与应用编排事件（`application/events.py`，如 `SessionCreated/RunStarted`）。
+5. **GUI 组成**：`ui/main_window.py` 只装配视图与转发，不写业务；布局为 `TitleBar + SessionSidebar + ActivityBar + MainTabs`（文件树 / 代码编辑器 / 对话）+ `Toast`。`ui/viewmodels/chat_viewmodel.py` 是唯一调用 `ChatService` 并暴露 Qt Signal 的入口。
 
 ### Agent 引擎（仅存在于 `infrastructure/agent/`）
 
