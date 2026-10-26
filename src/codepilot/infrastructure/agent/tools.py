@@ -9,9 +9,10 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Annotated, Any, cast
 
+from langchain_core.messages import ToolMessage
 from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_core.tools import InjectedToolArg, StructuredTool
 from pydantic import BaseModel, Field, ValidationError
@@ -37,6 +38,9 @@ class RunDeps:
     # 已 bind_tools 的可运行体；框架边界，用 Runnable[Any, Any] 承接
     model: Runnable[Any, Any]
     command_timeout_s: float
+    # tool_call_id → 已执行结果。interrupt 恢复会重放整个 tools_node，
+    # 用它跳过已落盘的副作用；同一 RunDeps 跨 resume 复用，故进程内有效。
+    done: dict[str, ToolMessage] = field(default_factory=dict)
 
 
 def _deps(config: RunnableConfig) -> RunDeps:

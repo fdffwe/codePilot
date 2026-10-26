@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from langchain_core.messages import AIMessage
@@ -310,6 +311,46 @@ async def test_multiple_writes_get_distinct_approval_ids(tmp_path: Path) -> None
 
     third = [ev async for ev in orch.resume("r10", approved=True)]
     assert (tmp_path / "a.py").exists() and (tmp_path / "b.py").exists()
+    assert isinstance(third[-1], RunFinishedEvent)
+
+
+async def test_approved_effect_not_replayed_on_later_resume(tmp_path: Path) -> None:
+    """interrupt 恢复会重放 tools_node；已执行的副作用不得再执行一次。"""
+    append = [
+        sys.executable,
+        "-c",
+        "open('log.txt', 'a', encoding='utf-8').write('x')",
+    ]
+    batch = AIMessage(
+        content="",
+        tool_calls=[
+            {"name": "run_command", "args": {"argv": append}, "id": "c1"},
+            {"name": "run_command", "args": {"argv": append}, "id": "c2"},
+        ],
+    )
+    orch = _orchestrator([batch, AIMessage(content="完成")], tmp_path)
+
+    first = [
+        ev
+        async for ev in orch.stream(
+            run_id="r11",
+            session_id="s1",
+            model="fake",
+            messages=[_user("追加两次")],
+            workspace_path=str(tmp_path),
+        )
+    ]
+    assert next(e for e in first if isinstance(e, ApprovalRequiredEvent))
+    assert not (tmp_path / "log.txt").exists()
+
+    # 批准 c1：执行一次，随后停在 c2 审批
+    second = [ev async for ev in orch.resume("r11", approved=True)]
+    assert (tmp_path / "log.txt").read_text(encoding="utf-8") == "x"
+    assert next(e for e in second if isinstance(e, ApprovalRequiredEvent))
+
+    # 批准 c2：重放时 c1 必须复用缓存，否则会写成 "xxx"
+    third = [ev async for ev in orch.resume("r11", approved=True)]
+    assert (tmp_path / "log.txt").read_text(encoding="utf-8") == "xx"
     assert isinstance(third[-1], RunFinishedEvent)
 
 

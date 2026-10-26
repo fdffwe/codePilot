@@ -56,18 +56,28 @@ def _try_preview(
 async def _invoke(
     tool: BaseTool, call: ToolCall, config: RunnableConfig
 ) -> ToolMessage:
-    """执行工具；领域异常转成 error 结果，避免终止整个 run。"""
+    """执行工具；领域异常转成 error 结果，避免终止整个 run。
+
+    按 ``tool_call_id`` 缓存结果：interrupt 恢复会从头重放节点，已执行的调用
+    直接复用上次结果，避免副作用重复生效。缓存检查必须在审批 ``interrupt``
+    之后（本函数即调用点），否则会改变 interrupt 的调用顺序、错配 resume 值。
+    """
+    deps = _deps(config)
     name = str(call["name"])
     call_id = str(call["id"])
+    if call_id in deps.done:
+        return deps.done[call_id]
     try:
-        return await tool.ainvoke(call, config)
+        result = await tool.ainvoke(call, config)
     except DomainError as exc:
-        return ToolMessage(
+        result = ToolMessage(
             content=f"错误：{exc}",
             tool_call_id=call_id,
             status="error",
             name=name,
         )
+    deps.done[call_id] = result
+    return result
 
 
 async def tools_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
