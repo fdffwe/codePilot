@@ -19,6 +19,7 @@ from alembic.config import Config as AlembicConfig
 from codepilot.application.chat_service import ChatService
 from codepilot.application.event_bus import EventBus
 from codepilot.core.config import Settings
+from codepilot.domain.approval import ApprovalPolicy
 from codepilot.domain.ports import WorkspaceProvider
 from codepilot.infrastructure.agent import LangGraphOrchestrator
 from codepilot.infrastructure.agent.checkpointer import open_sqlite_checkpointer
@@ -88,6 +89,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             raise RuntimeError("未配置 LLM API Key（CODEPILOT_LLM_API_KEY）")
 
         workspace_factory = _workspace_factory(settings)
+        approval_policy = ApprovalPolicy(mode=settings.approval_mode)
         orchestrator = LangGraphOrchestrator(
             checkpointer=saver,
             model_factory=model_factory,
@@ -95,6 +97,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             executor=LocalExecutor(max_output_bytes=settings.command_max_output_bytes),
             command_timeout_s=settings.command_timeout_s,
             max_iterations=settings.agent_max_iterations,
+            approval_policy=approval_policy,
         )
         bus = EventBus()
         chat_service = ChatService(

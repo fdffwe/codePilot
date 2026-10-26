@@ -1,14 +1,14 @@
 """LangGraph 编排器：实现 domain/ports::AgentOrchestrator。
 
 把框架的 ``astream(updates)`` 转译为领域 ``AgentEvent``；框架类型不外泄。
-HITL：非只读工具在工具节点 ``interrupt()``，``resume`` 用 ``Command(resume=)`` 继续。
-见规范 §10。
+HITL：``approval`` 节点每次只处理一个交互并 ``interrupt()``，靠条件边自环推进；
+``resume`` / ``answer`` 用 ``Command(resume=)`` 继续。见规范 §10。
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from typing import Any
 from uuid import uuid4
 
@@ -17,6 +17,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import Command, Interrupt
 
+from codepilot.domain.approval import ApprovalPolicy
 from codepilot.domain.entities import Approval, Message, Question, ToolCall
 from codepilot.domain.events import (
     AgentEvent,
@@ -61,6 +62,7 @@ class LangGraphOrchestrator:
         executor: Executor,
         command_timeout_s: float,
         max_iterations: int,
+        approval_policy: ApprovalPolicy | None = None,
         system_prompt: str = DEFAULT_SYSTEM_PROMPT,
     ) -> None:
         self._graph = build_graph().compile(checkpointer=checkpointer)
@@ -69,6 +71,7 @@ class LangGraphOrchestrator:
         self._executor = executor
         self._command_timeout_s = command_timeout_s
         self._max_iterations = max_iterations
+        self._approval_policy = approval_policy or ApprovalPolicy()
         self._system_prompt = system_prompt
         self._runs: dict[str, RunDeps] = {}
         self._session_ids: dict[str, str] = {}
@@ -85,7 +88,7 @@ class LangGraphOrchestrator:
         messages: Sequence[Message],
         workspace_path: str,
     ) -> AsyncIterator[AgentEvent]:
-        deps = self._make_deps(model, workspace_path)
+        deps = self._make_deps(model, workspace_path, session_id)
         self._runs[run_id] = deps
         self._session_ids[run_id] = session_id
         self._seq[run_id] = 0
@@ -143,7 +146,13 @@ class LangGraphOrchestrator:
         async for event in self._translate(updates, run_id):
             yield event
 
-    def _make_deps(self, model: str, workspace_path: str) -> RunDeps:
+    def remember_approval(
+        self, session_id: str, tool: str, arguments: Mapping[str, object]
+    ) -> None:
+        """用户选择“本次会话允许”后，记住该操作以免再次询问。"""
+        self._approval_policy.remember(session_id, tool, arguments)
+
+    def _make_deps(self, model: str, workspace_path: str, session_id: str) -> RunDeps:
         workspace = self._workspace_factory(workspace_path)
         bound = self._model_factory(model).bind_tools(TOOLS)
         return RunDeps(
@@ -151,6 +160,8 @@ class LangGraphOrchestrator:
             executor=self._executor,
             model=bound,
             command_timeout_s=self._command_timeout_s,
+            session_id=session_id,
+            policy=self._approval_policy,
         )
 
     def _prepare_input(self, messages: Sequence[Message]) -> list[AnyMessage]:
@@ -243,7 +254,7 @@ class LangGraphOrchestrator:
                     ToolCallEvent(run_id=run_id, seq=self._next(run_id), call=call)
                     for call in tool_calls
                 )
-        elif node == "tools":
+        elif node == "execute":
             for msg in value.get("messages", []):
                 cid = str(getattr(msg, "tool_call_id", ""))
                 fallback_name = str(getattr(msg, "name", "") or "")

@@ -18,6 +18,7 @@ from langchain_core.tools import InjectedToolArg, StructuredTool
 from pydantic import BaseModel, Field, ValidationError
 
 from codepilot.core.errors import DomainError
+from codepilot.domain.approval import ApprovalPolicy
 from codepilot.domain.enums import ToolSafety
 from codepilot.domain.ports import Executor, WorkspaceProvider
 
@@ -38,7 +39,10 @@ class RunDeps:
     # 已 bind_tools 的可运行体；框架边界，用 Runnable[Any, Any] 承接
     model: Runnable[Any, Any]
     command_timeout_s: float
-    # tool_call_id → 已执行结果。interrupt 恢复会重放整个 tools_node，
+    session_id: str = ""
+    # 审批策略与本次会话的允许列表（由编排器注入，跨 run 复用同一个实例）
+    policy: ApprovalPolicy = field(default_factory=ApprovalPolicy)
+    # tool_call_id → 已执行结果。execute 节点若因重试被再次执行，
     # 用它跳过已落盘的副作用；同一 RunDeps 跨 resume 复用，故进程内有效。
     done: dict[str, ToolMessage] = field(default_factory=dict)
 

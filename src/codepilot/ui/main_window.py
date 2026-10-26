@@ -9,6 +9,7 @@ from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtGui import QCloseEvent, QMouseEvent, QResizeEvent
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -203,6 +204,8 @@ class MainWindow(QMainWindow):
         self._approval_preview.setObjectName("ApprovalPreview")
         self._approval_preview.setReadOnly(True)
         self._approval_preview.setFixedHeight(120)
+        self._approval_remember = QCheckBox("本次会话允许相同操作", box)
+        self._approval_remember.setCursor(Qt.CursorShape.PointingHandCursor)
 
         buttons = QHBoxLayout()
         buttons.addStretch(1)
@@ -216,6 +219,7 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self._approval_label)
         layout.addWidget(self._approval_preview)
+        layout.addWidget(self._approval_remember)
         layout.addLayout(buttons)
         return box
 
@@ -285,6 +289,7 @@ class MainWindow(QMainWindow):
         self._pending_question = None
         self._question_box.setVisible(False)
         self._pending_approval = approval
+        self._approval_remember.setChecked(False)
         self._approval_label.setText(f"{approval.tool}（风险：{approval.risk}）")
         self._approval_preview.setPlainText(approval.preview)
         self._approval_box.setVisible(True)
@@ -337,13 +342,16 @@ class MainWindow(QMainWindow):
     def _resolve(self, approved: bool) -> None:
         if self._pending_approval is None:
             return
+        remember = approved and self._approval_remember.isChecked()
         self._approval_box.setVisible(False)
-        self._vm.resolve_approval(self._pending_approval.id, approved)
+        self._approval_remember.setChecked(False)
+        self._vm.resolve_approval(self._pending_approval.id, approved, remember)
         self._pending_approval = None
 
     def _on_run_finished(self, iterations: int) -> None:
         self._pending_approval = None
         self._pending_question = None
+        self._approval_remember.setChecked(False)
         self._approval_box.setVisible(False)
         self._question_box.setVisible(False)
         self._notify("agent 已停止", f"本轮工作结束（共 {iterations} 轮）")

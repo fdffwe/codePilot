@@ -82,6 +82,7 @@ class FakeOrchestrator:
         self._second = second
         self.resumed: list[tuple[str, bool]] = []
         self.answered: list[tuple[str, str]] = []
+        self.remembered: list[tuple[str, str, dict[str, object]]] = []
 
     def _bind(self, event: AgentEvent, run_id: str, session_id: str) -> AgentEvent:
         if isinstance(event, ApprovalRequiredEvent):
@@ -113,6 +114,11 @@ class FakeOrchestrator:
         self.answered.append((run_id, text))
         for event in self._second:
             yield replace(event, run_id=run_id)
+
+    def remember_approval(
+        self, session_id: str, tool: str, arguments: dict[str, object]
+    ) -> None:
+        self.remembered.append((session_id, tool, dict(arguments)))
 
 
 def _service(
@@ -212,6 +218,54 @@ async def test_send_surfaces_approval_and_resolve_continues(tmp_path: Path) -> N
     stored = await messages.list(session.id)
     assert stored[-1].role == MessageRole.ASSISTANT
     assert stored[-1].content == "写好了"
+
+
+async def test_resolve_approval_can_remember_for_session(tmp_path: Path) -> None:
+    call = ToolCall(id="c1", name="write_file", arguments={"path": "a.py"})
+    approval = Approval(
+        id="a1",
+        session_id="",
+        run_id="r",
+        tool="write_file",
+        payload={"path": "a.py"},
+        preview="+ x",
+    )
+    orchestrator = FakeOrchestrator(
+        [
+            MessageEvent(run_id="r", seq=0, content="", tool_calls=(call,)),
+            ApprovalRequiredEvent(run_id="r", seq=1, approval=approval),
+        ],
+        [RunFinishedEvent(run_id="r", seq=0, iterations=1)],
+    )
+    service, _, _, _ = _service(orchestrator, allowlist=[tmp_path])
+    session = await service.create_session(workspace_path=tmp_path)
+    await service.send(session.id, "写个文件")
+
+    await service.resolve_approval("a1", approved=True, remember=True)
+
+    assert orchestrator.remembered == [(session.id, "write_file", {"path": "a.py"})]
+
+
+async def test_rejected_approval_is_not_remembered(tmp_path: Path) -> None:
+    approval = Approval(
+        id="a1",
+        session_id="",
+        run_id="r",
+        tool="write_file",
+        payload={"path": "a.py"},
+        preview="+ x",
+    )
+    orchestrator = FakeOrchestrator(
+        [ApprovalRequiredEvent(run_id="r", seq=0, approval=approval)],
+        [RunFinishedEvent(run_id="r", seq=0, iterations=1)],
+    )
+    service, _, _, _ = _service(orchestrator, allowlist=[tmp_path])
+    session = await service.create_session(workspace_path=tmp_path)
+    await service.send(session.id, "写个文件")
+
+    await service.resolve_approval("a1", approved=False, remember=True)
+
+    assert orchestrator.remembered == []
 
 
 async def test_question_surfaces_not_persisted_and_answer_continues(

@@ -8,6 +8,7 @@ from pathlib import Path
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
+from codepilot.domain.approval import ApprovalMode, ApprovalPolicy
 from codepilot.domain.entities import Message
 from codepilot.domain.enums import MessageRole
 from codepilot.domain.events import (
@@ -29,7 +30,12 @@ def _tool_call(name: str, args: dict, cid: str) -> AIMessage:
     return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": cid}])
 
 
-def _orchestrator(responses: list[AIMessage], root: Path) -> LangGraphOrchestrator:
+def _orchestrator(
+    responses: list[AIMessage],
+    root: Path,
+    *,
+    policy: ApprovalPolicy | None = None,
+) -> LangGraphOrchestrator:
     return LangGraphOrchestrator(
         checkpointer=InMemorySaver(),
         model_factory=FakeChatModelFactory(responses),
@@ -37,6 +43,7 @@ def _orchestrator(responses: list[AIMessage], root: Path) -> LangGraphOrchestrat
         executor=LocalExecutor(),
         command_timeout_s=10,
         max_iterations=5,
+        approval_policy=policy,
     )
 
 
@@ -275,6 +282,44 @@ async def test_ask_user_then_write_requires_approval(tmp_path: Path) -> None:
     assert isinstance(third[-1], RunFinishedEvent)
 
 
+async def test_mixed_write_then_question_keeps_call_order(tmp_path: Path) -> None:
+    batch = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "write_file",
+                "args": {"path": "a.py", "content": "x"},
+                "id": "w1",
+            },
+            {"name": "ask_user", "args": {"question": "继续吗？"}, "id": "q1"},
+        ],
+    )
+    orch = _orchestrator([batch, AIMessage(content="完成")], tmp_path)
+
+    first = [
+        ev
+        async for ev in orch.stream(
+            run_id="r16",
+            session_id="s1",
+            model="fake",
+            messages=[_user("写并问")],
+            workspace_path=str(tmp_path),
+        )
+    ]
+    # 交互按调用顺序逐个处理：先审批写入，再提问
+    assert any(isinstance(e, ApprovalRequiredEvent) for e in first)
+    assert not any(isinstance(e, QuestionRequiredEvent) for e in first)
+    assert not (tmp_path / "a.py").exists()
+
+    second = [ev async for ev in orch.resume("r16", approved=True)]
+    assert any(isinstance(e, QuestionRequiredEvent) for e in second)
+    assert not (tmp_path / "a.py").exists()
+
+    third = [ev async for ev in orch.answer("r16", text="继续")]
+    assert (tmp_path / "a.py").read_text(encoding="utf-8") == "x"
+    assert isinstance(third[-1], RunFinishedEvent)
+
+
 async def test_answer_wrong_kind_is_rejected(tmp_path: Path) -> None:
     orch = _orchestrator(
         [
@@ -340,8 +385,10 @@ async def test_multiple_writes_get_distinct_approval_ids(tmp_path: Path) -> None
     assert isinstance(third[-1], RunFinishedEvent)
 
 
-async def test_approved_effect_not_replayed_on_later_resume(tmp_path: Path) -> None:
-    """interrupt 恢复会重放 tools_node；已执行的副作用不得再执行一次。"""
+async def test_approved_effects_execute_once_after_all_approvals(
+    tmp_path: Path,
+) -> None:
+    """审批阶段不产生副作用，全部批准后 execute 只执行一次。"""
     append = [
         sys.executable,
         "-c",
@@ -369,12 +416,12 @@ async def test_approved_effect_not_replayed_on_later_resume(tmp_path: Path) -> N
     assert next(e for e in first if isinstance(e, ApprovalRequiredEvent))
     assert not (tmp_path / "log.txt").exists()
 
-    # 批准 c1：执行一次，随后停在 c2 审批
+    # 批准 c1：尚未执行，自环到 c2 审批
     second = [ev async for ev in orch.resume("r11", approved=True)]
-    assert (tmp_path / "log.txt").read_text(encoding="utf-8") == "x"
+    assert not (tmp_path / "log.txt").exists()
     assert next(e for e in second if isinstance(e, ApprovalRequiredEvent))
 
-    # 批准 c2：重放时 c1 必须复用缓存，否则会写成 "xxx"
+    # 批准 c2：全部审批完成，execute 按顺序执行两次
     third = [ev async for ev in orch.resume("r11", approved=True)]
     assert (tmp_path / "log.txt").read_text(encoding="utf-8") == "xx"
     assert isinstance(third[-1], RunFinishedEvent)
@@ -401,4 +448,104 @@ async def test_invalid_tool_args_do_not_abort_run(tmp_path: Path) -> None:
     ]
     result = next(e for e in events if isinstance(e, ToolResultEvent))
     assert not result.ok
+    assert isinstance(events[-1], RunFinishedEvent)
+
+
+async def test_plan_mode_denies_write_without_prompt(tmp_path: Path) -> None:
+    orch = _orchestrator(
+        [
+            _tool_call("write_file", {"path": "a.py", "content": "x = 1\n"}, "c1"),
+            AIMessage(content="没写"),
+        ],
+        tmp_path,
+        policy=ApprovalPolicy(mode=ApprovalMode.PLAN),
+    )
+    events = [
+        ev
+        async for ev in orch.stream(
+            run_id="r12",
+            session_id="s1",
+            model="fake",
+            messages=[_user("写文件")],
+            workspace_path=str(tmp_path),
+        )
+    ]
+    assert not any(isinstance(e, ApprovalRequiredEvent) for e in events)
+    result = next(e for e in events if isinstance(e, ToolResultEvent))
+    assert not result.ok and "策略拒绝" in result.output
+    assert not (tmp_path / "a.py").exists()
+    assert isinstance(events[-1], RunFinishedEvent)
+
+
+async def test_auto_edit_mode_writes_without_prompt(tmp_path: Path) -> None:
+    orch = _orchestrator(
+        [
+            _tool_call("write_file", {"path": "a.py", "content": "x = 1\n"}, "c1"),
+            AIMessage(content="写好了"),
+        ],
+        tmp_path,
+        policy=ApprovalPolicy(mode=ApprovalMode.AUTO_EDIT),
+    )
+    events = [
+        ev
+        async for ev in orch.stream(
+            run_id="r13",
+            session_id="s1",
+            model="fake",
+            messages=[_user("写文件")],
+            workspace_path=str(tmp_path),
+        )
+    ]
+    assert not any(isinstance(e, ApprovalRequiredEvent) for e in events)
+    assert (tmp_path / "a.py").read_text(encoding="utf-8") == "x = 1\n"
+    assert isinstance(events[-1], RunFinishedEvent)
+
+
+async def test_hard_denied_command_never_runs_or_prompts(tmp_path: Path) -> None:
+    orch = _orchestrator(
+        [
+            _tool_call("run_command", {"argv": ["sudo", "ls"]}, "c1"),
+            AIMessage(content="没执行"),
+        ],
+        tmp_path,
+    )
+    events = [
+        ev
+        async for ev in orch.stream(
+            run_id="r14",
+            session_id="s1",
+            model="fake",
+            messages=[_user("提权")],
+            workspace_path=str(tmp_path),
+        )
+    ]
+    assert not any(isinstance(e, ApprovalRequiredEvent) for e in events)
+    result = next(e for e in events if isinstance(e, ToolResultEvent))
+    assert not result.ok and "禁止执行高危命令" in result.output
+    assert isinstance(events[-1], RunFinishedEvent)
+
+
+async def test_session_allowed_write_skips_prompt(tmp_path: Path) -> None:
+    policy = ApprovalPolicy()
+    policy.remember("s1", "write_file", {"path": "a.py", "content": "x = 1\n"})
+    orch = _orchestrator(
+        [
+            _tool_call("write_file", {"path": "a.py", "content": "x = 1\n"}, "c1"),
+            AIMessage(content="写好了"),
+        ],
+        tmp_path,
+        policy=policy,
+    )
+    events = [
+        ev
+        async for ev in orch.stream(
+            run_id="r15",
+            session_id="s1",
+            model="fake",
+            messages=[_user("写文件")],
+            workspace_path=str(tmp_path),
+        )
+    ]
+    assert not any(isinstance(e, ApprovalRequiredEvent) for e in events)
+    assert (tmp_path / "a.py").read_text(encoding="utf-8") == "x = 1\n"
     assert isinstance(events[-1], RunFinishedEvent)

@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Protocol, runtime_checkable
 
 from codepilot.domain.entities import Message
@@ -31,3 +31,8 @@ class AgentOrchestrator(Protocol):
 
     def answer(self, run_id: str, *, text: str) -> AsyncIterator[AgentEvent]:
         """回答暂停中的 run 的澄清提问并继续，流式产出后续事件。"""
+
+    def remember_approval(
+        self, session_id: str, tool: str, arguments: Mapping[str, object]
+    ) -> None:
+        """记住用户在本次会话中允许过的相同操作，后续不再询问。"""

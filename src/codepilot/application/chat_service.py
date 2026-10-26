@@ -91,11 +91,18 @@ class ChatService:
         )
         await self._drive(events, session)
 
-    async def resolve_approval(self, approval_id: str, *, approved: bool) -> None:
+    async def resolve_approval(
+        self, approval_id: str, *, approved: bool, remember: bool = False
+    ) -> None:
         approval = await self._approvals.get(approval_id)
         if approval is None:
             raise NotFoundError(f"审批不存在：{approval_id}")
         await self._approvals.resolve(approval_id, approved=approved)
+        if approved and remember:
+            # 只记住用户明确允许的相同操作；拒绝不产生规则
+            self._orchestrator.remember_approval(
+                approval.session_id, approval.tool, approval.payload
+            )
         session = await self._require_session(approval.session_id)
         events = self._orchestrator.resume(approval.run_id, approved=approved)
         await self._drive(events, session)

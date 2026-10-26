@@ -10,6 +10,8 @@ from pathlib import Path
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from codepilot.domain.approval import ApprovalMode
+
 
 class Settings(BaseSettings):
     """全局配置。敏感项用 SecretStr，禁止入库/进日志明文。"""
@@ -34,6 +36,10 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://api.deepseek.com"
     llm_model: str = "deepseek-chat"
     llm_api_key: SecretStr | None = None
+
+    # --- 审批 ---
+    # plan：只读；default：写/执行询问；auto-edit：编辑放行；yolo：全部放行
+    approval_mode: ApprovalMode = ApprovalMode.DEFAULT
 
     # --- 执行与编排 ---
     command_timeout_s: int = 120

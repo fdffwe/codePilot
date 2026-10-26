@@ -62,8 +62,8 @@ ui ─▶ application ─▶ domain ◀─ infrastructure（实现 domain 的 po
 
 ### Agent 引擎（仅存在于 `infrastructure/agent/`）
 
-- `graph.py`：**单个 StateGraph**，`agent ↔ tools` 循环，条件边由 `tool_calls` 与 `max_iterations` 决定。
-- **HITL**：写/执行工具在 `tools_node` 执行前 `interrupt({...})` 暂停；`ChatService.resolve_approval` → `orchestrator.resume` 用 `Command(resume=approved)` 恢复。`ask_user`（safety=`ASK`）同样 `interrupt`，用户回答经 `ChatService.answer_question` → `orchestrator.answer` 以 `Command(resume=text)` 恢复；问题不持久化。检查点用 SQLite，`thread_id = run_id`。
+- `graph.py`：**单个 StateGraph**，`agent → prepare → approval(自环) → execute → agent`。`prepare` 按策略把调用分成直接执行/待审批/待回答/失败；`approval` 节点**每次只处理一个交互并调用一次 `interrupt()`**，通过条件边自环推进 `cursor`，审批阶段不产生副作用；`execute` 在全部交互结束后按原顺序统一执行。循环由 `tool_calls` 与 `max_iterations` 控制。
+- **HITL**：写/执行工具先经 `domain/approval.py` 的 `ApprovalPolicy` 决策（模式 `plan/default/auto-edit/yolo`，配置项 `CODEPILOT_APPROVAL_MODE`）：只读与命中允许规则/会话允许的调用直接放行，硬拒绝高危命令（`sudo`、`rm -rf /`、写块设备等），其余进入 `approval` 节点逐个 `interrupt({...})`。`ChatService.resolve_approval` → `orchestrator.resume` 用 `Command(resume=approved)` 恢复，`remember=True` 时把相同操作加入会话允许列表；`ask_user` 与审批共用同一个交互队列。`ask_user`（safety=`ASK`）同样 `interrupt`，用户回答经 `ChatService.answer_question` → `orchestrator.answer` 以 `Command(resume=text)` 恢复；问题不持久化。检查点用 SQLite，`thread_id = run_id`。
 - `tools.py`：LangChain `StructuredTool` 集合 `TOOLS`（`read_file/list_dir/glob/grep/write_file/edit_file/ask_user/run_command`），`safety`/`risk`/`preview` 挂在 `tool.metadata`。**工具函数体不直接碰文件/命令**，一律经 `WorkspaceProvider` / `Executor` 端口；检索（`glob`/`grep`）在 workspace 适配器内用 `asyncio.to_thread` 遍历，默认忽略 `.git`/`node_modules`/构建目录并跳过符号链接。
 - 一次 run 的运行时依赖走 `RunDeps`，经 LangGraph `config["configurable"]` 注入节点，**不进 checkpoint 状态**。
 

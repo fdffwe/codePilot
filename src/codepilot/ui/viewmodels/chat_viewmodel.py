@@ -58,8 +58,10 @@ class ChatViewModel(QObject):
             return
         self._spawn(self._send(text))
 
-    def resolve_approval(self, approval_id: str, approved: bool) -> None:
-        self._spawn(self._resolve(approval_id, approved))
+    def resolve_approval(
+        self, approval_id: str, approved: bool, remember: bool = False
+    ) -> None:
+        self._spawn(self._resolve(approval_id, approved, remember))
 
     def answer_question(self, question: Question, text: str) -> None:
         self._spawn(self._answer_question(question, text))
@@ -104,10 +106,14 @@ class ChatViewModel(QObject):
         finally:
             self.busyChanged.emit(False)
 
-    async def _resolve(self, approval_id: str, approved: bool) -> None:
+    async def _resolve(
+        self, approval_id: str, approved: bool, remember: bool = False
+    ) -> None:
         self.busyChanged.emit(True)
         try:
-            await self._service.resolve_approval(approval_id, approved=approved)
+            await self._service.resolve_approval(
+                approval_id, approved=approved, remember=remember
+            )
         except DomainError as exc:
             self.errorOccurred.emit(str(exc))
         finally:
