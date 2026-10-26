@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable, Iterable
+from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from pathlib import Path
 from uuid import uuid4
 
@@ -18,6 +18,7 @@ from codepilot.domain.enums import MessageRole
 from codepilot.domain.events import (
     AgentEvent,
     ApprovalRequiredEvent,
+    ApprovalsRequiredEvent,
     MessageEvent,
     RunFinishedEvent,
 )
@@ -94,17 +95,43 @@ class ChatService:
     async def resolve_approval(
         self, approval_id: str, *, approved: bool, remember: bool = False
     ) -> None:
-        approval = await self._approvals.get(approval_id)
-        if approval is None:
-            raise NotFoundError(f"审批不存在：{approval_id}")
-        await self._approvals.resolve(approval_id, approved=approved)
-        if approved and remember:
-            # 只记住用户明确允许的相同操作；拒绝不产生规则
-            self._orchestrator.remember_approval(
-                approval.session_id, approval.tool, approval.payload
-            )
-        session = await self._require_session(approval.session_id)
-        events = self._orchestrator.resume(approval.run_id, approved=approved)
+        await self.resolve_approvals(
+            [approval_id], approved=approved, remember=remember
+        )
+
+    async def resolve_approvals(
+        self,
+        approval_ids: Sequence[str],
+        *,
+        approved: bool,
+        remember: bool = False,
+    ) -> None:
+        """一次给出整批审批结论；所有审批必须属于同一个 run。"""
+        ids = list(dict.fromkeys(approval_ids))
+        if not ids:
+            raise ValidationError("没有待处理的审批")
+
+        approvals = []
+        for approval_id in ids:
+            approval = await self._approvals.get(approval_id)
+            if approval is None:
+                raise NotFoundError(f"审批不存在：{approval_id}")
+            approvals.append(approval)
+
+        run_ids = {approval.run_id for approval in approvals}
+        if len(run_ids) != 1:
+            raise ValidationError("同一次确认的审批必须属于同一个 run")
+
+        for approval in approvals:
+            await self._approvals.resolve(approval.id, approved=approved)
+            if approved and remember:
+                # 只记住用户明确允许的相同操作；拒绝不产生规则
+                self._orchestrator.remember_approval(
+                    approval.session_id, approval.tool, approval.payload
+                )
+
+        session = await self._require_session(approvals[0].session_id)
+        events = self._orchestrator.resume(approvals[0].run_id, approved=approved)
         await self._drive(events, session)
 
     async def answer_question(self, session_id: str, run_id: str, text: str) -> None:
@@ -156,6 +183,9 @@ class ChatService:
                 final_text = event.content
             elif isinstance(event, ApprovalRequiredEvent):
                 await self._approvals.add(event.approval)
+            elif isinstance(event, ApprovalsRequiredEvent):
+                for approval in event.approvals:
+                    await self._approvals.add(approval)
             elif isinstance(event, RunFinishedEvent) and final_text:
                 await self._messages.append(
                     session.id,

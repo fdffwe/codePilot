@@ -13,6 +13,7 @@ from codepilot.domain.entities import Message
 from codepilot.domain.enums import MessageRole
 from codepilot.domain.events import (
     ApprovalRequiredEvent,
+    ApprovalsRequiredEvent,
     ErrorEvent,
     MessageEvent,
     QuestionRequiredEvent,
@@ -347,7 +348,7 @@ async def test_answer_wrong_kind_is_rejected(tmp_path: Path) -> None:
     assert isinstance(right[-1], RunFinishedEvent)
 
 
-async def test_multiple_writes_get_distinct_approval_ids(tmp_path: Path) -> None:
+async def test_multiple_writes_share_one_batch_approval(tmp_path: Path) -> None:
     batch = AIMessage(
         content="",
         tool_calls=[
@@ -374,13 +375,94 @@ async def test_multiple_writes_get_distinct_approval_ids(tmp_path: Path) -> None
             workspace_path=str(tmp_path),
         )
     ]
-    first_approval = next(e for e in first if isinstance(e, ApprovalRequiredEvent))
+    # 连续两个写操作合并为一张审批单，只需确认一次
+    required = next(e for e in first if isinstance(e, ApprovalsRequiredEvent))
+    assert [a.tool for a in required.approvals] == ["write_file", "write_file"]
+    assert len({a.id for a in required.approvals}) == 2
+    assert not any(isinstance(e, ApprovalRequiredEvent) for e in first)
+    assert not (tmp_path / "a.py").exists()
 
     second = [ev async for ev in orch.resume("r10", approved=True)]
-    second_approval = next(e for e in second if isinstance(e, ApprovalRequiredEvent))
-    assert first_approval.approval.id != second_approval.approval.id
+    assert (tmp_path / "a.py").read_text(encoding="utf-8") == "a"
+    assert (tmp_path / "b.py").read_text(encoding="utf-8") == "b"
+    assert isinstance(second[-1], RunFinishedEvent)
 
-    third = [ev async for ev in orch.resume("r10", approved=True)]
+
+async def test_batch_approval_rejected_writes_nothing(tmp_path: Path) -> None:
+    batch = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "write_file",
+                "args": {"path": "a.py", "content": "a"},
+                "id": "c1",
+            },
+            {
+                "name": "write_file",
+                "args": {"path": "b.py", "content": "b"},
+                "id": "c2",
+            },
+        ],
+    )
+    orch = _orchestrator([batch, AIMessage(content="好，不写了")], tmp_path)
+    first = [
+        ev
+        async for ev in orch.stream(
+            run_id="r17",
+            session_id="s1",
+            model="fake",
+            messages=[_user("写两个文件")],
+            workspace_path=str(tmp_path),
+        )
+    ]
+    assert any(isinstance(e, ApprovalsRequiredEvent) for e in first)
+
+    second = [ev async for ev in orch.resume("r17", approved=False)]
+    assert not (tmp_path / "a.py").exists()
+    assert not (tmp_path / "b.py").exists()
+    results = [e for e in second if isinstance(e, ToolResultEvent)]
+    assert len(results) == 2 and all(not r.ok for r in results)
+    assert isinstance(second[-1], RunFinishedEvent)
+
+
+async def test_batch_approval_then_question_keeps_order(tmp_path: Path) -> None:
+    batch = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "write_file",
+                "args": {"path": "a.py", "content": "a"},
+                "id": "w1",
+            },
+            {
+                "name": "write_file",
+                "args": {"path": "b.py", "content": "b"},
+                "id": "w2",
+            },
+            {"name": "ask_user", "args": {"question": "继续吗？"}, "id": "q1"},
+        ],
+    )
+    orch = _orchestrator([batch, AIMessage(content="完成")], tmp_path)
+
+    first = [
+        ev
+        async for ev in orch.stream(
+            run_id="r18",
+            session_id="s1",
+            model="fake",
+            messages=[_user("写并问")],
+            workspace_path=str(tmp_path),
+        )
+    ]
+    required = next(e for e in first if isinstance(e, ApprovalsRequiredEvent))
+    assert len(required.approvals) == 2
+    assert not any(isinstance(e, QuestionRequiredEvent) for e in first)
+
+    second = [ev async for ev in orch.resume("r18", approved=True)]
+    assert any(isinstance(e, QuestionRequiredEvent) for e in second)
+    assert not (tmp_path / "a.py").exists()
+
+    third = [ev async for ev in orch.answer("r18", text="继续")]
     assert (tmp_path / "a.py").exists() and (tmp_path / "b.py").exists()
     assert isinstance(third[-1], RunFinishedEvent)
 
@@ -388,7 +470,7 @@ async def test_multiple_writes_get_distinct_approval_ids(tmp_path: Path) -> None
 async def test_approved_effects_execute_once_after_all_approvals(
     tmp_path: Path,
 ) -> None:
-    """审批阶段不产生副作用，全部批准后 execute 只执行一次。"""
+    """审批阶段不产生副作用，整批批准后 execute 按顺序各执行一次。"""
     append = [
         sys.executable,
         "-c",
@@ -413,18 +495,14 @@ async def test_approved_effects_execute_once_after_all_approvals(
             workspace_path=str(tmp_path),
         )
     ]
-    assert next(e for e in first if isinstance(e, ApprovalRequiredEvent))
+    required = next(e for e in first if isinstance(e, ApprovalsRequiredEvent))
+    assert len(required.approvals) == 2
     assert not (tmp_path / "log.txt").exists()
 
-    # 批准 c1：尚未执行，自环到 c2 审批
+    # 一次批准整批：execute 按顺序执行两次，不重复
     second = [ev async for ev in orch.resume("r11", approved=True)]
-    assert not (tmp_path / "log.txt").exists()
-    assert next(e for e in second if isinstance(e, ApprovalRequiredEvent))
-
-    # 批准 c2：全部审批完成，execute 按顺序执行两次
-    third = [ev async for ev in orch.resume("r11", approved=True)]
     assert (tmp_path / "log.txt").read_text(encoding="utf-8") == "xx"
-    assert isinstance(third[-1], RunFinishedEvent)
+    assert isinstance(second[-1], RunFinishedEvent)
 
 
 async def test_invalid_tool_args_do_not_abort_run(tmp_path: Path) -> None:

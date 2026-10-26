@@ -55,15 +55,15 @@ ui ─▶ application ─▶ domain ◀─ infrastructure（实现 domain 的 po
 ### 关键数据流
 
 1. **GUI → 用例**：`ui/viewmodels/chat_viewmodel.py` 持有 `ChatService`，用 `asyncio.ensure_future` 拉起协程并把结果转成 Qt Signal；Widget 只连信号、不写业务逻辑。
-2. **用例 → Agent**：`application/chat_service.py` 调 `AgentOrchestrator.stream()`，逐条消费领域事件 `domain/events.py`（`Message/ToolCall/ToolResult/ApprovalRequired/QuestionRequired/RunFinished/Error`），落库消息与审批（提问不落库）。
+2. **用例 → Agent**：`application/chat_service.py` 调 `AgentOrchestrator.stream()`，逐条消费领域事件 `domain/events.py`（`Message/ToolCall/ToolResult/ApprovalRequired/ApprovalsRequired/QuestionRequired/RunFinished/Error`），落库消息与审批（提问不落库）。
 3. **框架隔离**：`infrastructure/agent/orchestrator.py`（`LangGraphOrchestrator`）实现 `AgentOrchestrator` 端口，把 LangGraph 的 `astream(updates)` 转译成领域事件，框架类型不外泄（映射层 `mappers.py`）。
 4. **事件回 UI**：`application/event_bus.py`（同步进程内总线）→ `ui/bridge.py::EventBridge` 把事件转成 Qt Signal；`ui/app.py` 用 **qasync** 融合 asyncio 与 Qt 事件循环。总线上有两类事件：Agent 事件（`domain/events.py`）与应用编排事件（`application/events.py`，如 `SessionCreated/RunStarted`）。
 5. **GUI 组成**：`ui/main_window.py` 只装配视图与转发，不写业务；布局为 `TitleBar + SessionSidebar + ActivityBar + MainTabs`（文件树 / 代码编辑器 / 对话）+ `Toast`。`ui/viewmodels/chat_viewmodel.py` 是唯一调用 `ChatService` 并暴露 Qt Signal 的入口。
 
 ### Agent 引擎（仅存在于 `infrastructure/agent/`）
 
-- `graph.py`：**单个 StateGraph**，`agent → prepare → approval(自环) → execute → agent`。`prepare` 按策略把调用分成直接执行/待审批/待回答/失败；`approval` 节点**每次只处理一个交互并调用一次 `interrupt()`**，通过条件边自环推进 `cursor`，审批阶段不产生副作用；`execute` 在全部交互结束后按原顺序统一执行。循环由 `tool_calls` 与 `max_iterations` 控制。
-- **HITL**：写/执行工具先经 `domain/approval.py` 的 `ApprovalPolicy` 决策（模式 `plan/default/auto-edit/yolo`，配置项 `CODEPILOT_APPROVAL_MODE`）：只读与命中允许规则/会话允许的调用直接放行，硬拒绝高危命令（`sudo`、`rm -rf /`、写块设备等），其余进入 `approval` 节点逐个 `interrupt({...})`。`ChatService.resolve_approval` → `orchestrator.resume` 用 `Command(resume=approved)` 恢复，`remember=True` 时把相同操作加入会话允许列表；`ask_user` 与审批共用同一个交互队列。`ask_user`（safety=`ASK`）同样 `interrupt`，用户回答经 `ChatService.answer_question` → `orchestrator.answer` 以 `Command(resume=text)` 恢复；问题不持久化。检查点用 SQLite，`thread_id = run_id`。
+- `graph.py`：**单个 StateGraph**，`agent → prepare → approval(自环) → execute → agent`。`prepare` 按策略把调用分成直接执行/待审批/待回答/失败；`approval` 节点**每次只调用一次 `interrupt()`**，连续多个待审批调用合并为一批一次确认（提问会截断批次并逐个处理），通过条件边自环推进 `cursor`，审批阶段不产生副作用；`execute` 在全部交互结束后按原顺序统一执行。循环由 `tool_calls` 与 `max_iterations` 控制。
+- **HITL**：写/执行工具先经 `domain/approval.py` 的 `ApprovalPolicy` 决策（模式 `plan/default/auto-edit/yolo`，配置项 `CODEPILOT_APPROVAL_MODE`）：只读与命中允许规则/会话允许的调用直接放行，硬拒绝高危命令（`sudo`、`rm -rf /`、写块设备等），其余进入 `approval` 节点：单个调用发 `ApprovalRequiredEvent`，连续多个合并为一批发 `ApprovalsRequiredEvent`，一次 `interrupt({...})` 确认整批。`ChatService.resolve_approval(s)` → `orchestrator.resume` 用 `Command(resume=approved)` 恢复，`remember=True` 时把相同操作加入会话允许列表；`ask_user` 与审批共用同一个交互队列。`ask_user`（safety=`ASK`）同样 `interrupt`，用户回答经 `ChatService.answer_question` → `orchestrator.answer` 以 `Command(resume=text)` 恢复；问题不持久化。检查点用 SQLite，`thread_id = run_id`。
 - `tools.py`：LangChain `StructuredTool` 集合 `TOOLS`（`read_file/list_dir/glob/grep/write_file/edit_file/ask_user/run_command`），`safety`/`risk`/`preview` 挂在 `tool.metadata`。**工具函数体不直接碰文件/命令**，一律经 `WorkspaceProvider` / `Executor` 端口；检索（`glob`/`grep`）在 workspace 适配器内用 `asyncio.to_thread` 遍历，默认忽略 `.git`/`node_modules`/构建目录并跳过符号链接。
 - 一次 run 的运行时依赖走 `RunDeps`，经 LangGraph `config["configurable"]` 注入节点，**不进 checkpoint 状态**。
 

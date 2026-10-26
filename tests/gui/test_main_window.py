@@ -64,8 +64,41 @@ async def test_approval_card_reflects_pending(qtbot, tmp_path) -> None:
             preview="+ x",
         )
     )
-    assert window._pending_approval is not None
+    assert len(window._pending_approvals) == 1
     assert "write_file" in window._approval_label.text()
+    assert window._allow_button.text() == "允许"
+
+
+@pytest.mark.asyncio
+async def test_batch_approval_card_shows_all_items(qtbot, tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path / ".codepilot")
+    window = MainWindow(
+        settings, ChatViewModel(StubChatService([])), EventBridge(EventBus())  # type: ignore[arg-type]
+    )
+    qtbot.addWidget(window)
+
+    approvals = tuple(
+        Approval(
+            id=f"a{i}",
+            session_id="s1",
+            run_id="r1",
+            tool="write_file",
+            payload={"path": f"{i}.py"},
+            preview=f"+ {i}",
+            risk=risk,
+        )
+        for i, risk in ((1, "medium"), (2, "high"))
+    )
+    window._on_approvals(approvals)
+
+    assert window._pending_approvals == list(approvals)
+    assert "2 个操作" in window._approval_label.text()
+    assert "high" in window._approval_label.text()
+    assert "1.py" not in window._approval_label.text()  # 明细在预览区
+    assert "+ 1" in window._approval_preview.toPlainText()
+    assert "+ 2" in window._approval_preview.toPlainText()
+    assert window._allow_button.text() == "全部允许"
+    assert window._reject_button.text() == "全部拒绝"
 
 
 @pytest.mark.asyncio
@@ -133,6 +166,7 @@ async def test_question_and_approval_cards_are_exclusive(qtbot, tmp_path) -> Non
         )
     )
     assert window._pending_question is None
+    assert window._pending_approvals
     assert window._question_box.isHidden()
     assert not window._approval_box.isHidden()
 

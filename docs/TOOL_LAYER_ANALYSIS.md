@@ -36,7 +36,7 @@
 
 > **进展（2026-10-24）**：P4（校验失败回传 error ToolMessage）、P5（改用 `StructuredTool`）、P9（工具单测）已修复；工具集已补 `edit_file` 与用户沟通工具 `ask_user`（提问时 run 暂停，回答后继续；问题不落库）。UI 增加审批/提问/结束/出错的浮层与任务栏提醒。
 >
-> **进展（2026-10-26）**：P1 的检索缺口已补 `glob`/`grep`（只读；`glob` 按通配模式返回工作区相对路径，`grep` 按正则返回 `路径:行号: 内容`；默认忽略 `.git`/`node_modules`/构建目录，跳过符号链接与二进制/超大文件，超限时显式提示截断）。P2 已按 `tool_call_id` 缓存执行结果，修复 interrupt 重放的副作用重复。审批层新增 `domain/approval.py`：按工具/参数决策 allow/ask/deny，支持 `plan/default/auto-edit/yolo` 模式、显式规则、会话允许列表与高危命令硬拒绝；P7 的风险分级已部分落地（命令风险与硬拒绝）。图结构改为 `prepare → approval(自环) → execute`，每个节点只保留一次 `interrupt()`，消除了循环内多次中断导致的 O(n²) 重放，且审批阶段不产生副作用；用户确认次数仍为逐个，批量确认尚未做。以下问题清单与差距表保留原始基线描述。
+> **进展（2026-10-26）**：P1 的检索缺口已补 `glob`/`grep`（只读；`glob` 按通配模式返回工作区相对路径，`grep` 按正则返回 `路径:行号: 内容`；默认忽略 `.git`/`node_modules`/构建目录，跳过符号链接与二进制/超大文件，超限时显式提示截断）。P2 已按 `tool_call_id` 缓存执行结果，修复 interrupt 重放的副作用重复。审批层新增 `domain/approval.py`：按工具/参数决策 allow/ask/deny，支持 `plan/default/auto-edit/yolo` 模式、显式规则、会话允许列表与高危命令硬拒绝；P7 的风险分级已部分落地（命令风险与硬拒绝）。图结构改为 `prepare → approval(自环) → execute`，每个节点只保留一次 `interrupt()`，消除了循环内多次中断导致的 O(n²) 重放，且审批阶段不产生副作用。连续多个待审批调用合并为一批，一次确认整批（`ApprovalsRequiredEvent`，UI 提供“全部允许/全部拒绝”）；提问会截断批次以保持调用顺序。以下问题清单与差距表保留原始基线描述。
 
 ## 3. 当前工具清单（6 个）
 
@@ -113,7 +113,7 @@ TDD §8 / 规范 §16 要求危险命令（`rm -rf /`、`sudo`、`mkfs`…）拒
 
 1. **补齐核心工具**：`edit_file`（基于 old/new 或 patch，配 diff preview）> `grep`/`glob` > `read_file` 加行号/分页。这是收益最大的改动。
 2. **加固执行路径**：幂等键（记录已完成的 `tool_call_id`）+ 参数校验失败转 error ToolMessage + 结果按行数/token 截断。
-3. **重构审批模型**：把"逐个 interrupt"改成"收集本轮所有待批准调用，一次性审批"，并细化 risk（区分危险命令）。
+3. **重构审批模型**：已改为"连续待批准调用批量确认"，单个调用保持原样；剩余：更细的风险分级与逐项选择（当前整批允许/拒绝）。
 4. **向 LangChain 抽象收敛**：评估用 `StructuredTool` 替换手写 schema（注意保持 safety 元数据与端口调用约束）。
 5. **补测试**：为每个 `ToolSpec` 加单元测试（schema/preview/参数边界/幂等）。
 

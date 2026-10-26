@@ -22,6 +22,7 @@ from codepilot.domain.entities import Approval, Message, Question, ToolCall
 from codepilot.domain.events import (
     AgentEvent,
     ApprovalRequiredEvent,
+    ApprovalsRequiredEvent,
     ErrorEvent,
     MessageEvent,
     QuestionRequiredEvent,
@@ -274,9 +275,10 @@ class LangGraphOrchestrator:
 
     def _interrupt_event(
         self, run_id: str, intr: Interrupt
-    ) -> ApprovalRequiredEvent | QuestionRequiredEvent:
+    ) -> ApprovalRequiredEvent | ApprovalsRequiredEvent | QuestionRequiredEvent:
         value = intr.value if isinstance(intr.value, dict) else {}
-        if value.get("kind") == "question":
+        kind = value.get("kind")
+        if kind == "question":
             question = Question(
                 # interrupt id 是 namespace 哈希，同节点多次中断会重复，改用独立 id
                 id=uuid4().hex,
@@ -288,12 +290,24 @@ class LangGraphOrchestrator:
             return QuestionRequiredEvent(
                 run_id=run_id, seq=self._next(run_id), question=question
             )
-        return self._approval_event(run_id, intr)
+        if kind == "approvals":
+            approvals = tuple(
+                self._make_approval(run_id, item)
+                for item in value.get("items") or []
+                if isinstance(item, dict)
+            )
+            return ApprovalsRequiredEvent(
+                run_id=run_id, seq=self._next(run_id), approvals=approvals
+            )
+        return ApprovalRequiredEvent(
+            run_id=run_id,
+            seq=self._next(run_id),
+            approval=self._make_approval(run_id, value),
+        )
 
-    def _approval_event(self, run_id: str, intr: Interrupt) -> ApprovalRequiredEvent:
-        value = intr.value if isinstance(intr.value, dict) else {}
-        approval = Approval(
-            # 同节点内多个 interrupt 共享 id，审批要落库，必须用唯一 id
+    def _make_approval(self, run_id: str, value: Mapping[str, Any]) -> Approval:
+        return Approval(
+            # 同一 interrupt 内的多个审批会共享 interrupt id，落库必须用唯一 id
             id=uuid4().hex,
             session_id=self._session_ids.get(run_id, ""),
             run_id=run_id,
@@ -301,7 +315,4 @@ class LangGraphOrchestrator:
             payload=dict(value.get("arguments") or {}),
             preview=str(value.get("preview", "")),
             risk=str(value.get("risk", "medium")),
-        )
-        return ApprovalRequiredEvent(
-            run_id=run_id, seq=self._next(run_id), approval=approval
         )

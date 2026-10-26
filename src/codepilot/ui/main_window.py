@@ -76,7 +76,7 @@ class MainWindow(QMainWindow):
         self._settings = settings
         self._vm = viewmodel
         self._bridge = bridge
-        self._pending_approval: Approval | None = None
+        self._pending_approvals: list[Approval] = []
         self._pending_question: Question | None = None
         self._option_buttons: list[QPushButton] = []
 
@@ -254,6 +254,7 @@ class MainWindow(QMainWindow):
         )
         self._bridge.toolResult.connect(self._on_tool_result)
         self._bridge.approvalRequested.connect(self._on_approval)
+        self._bridge.approvalsRequested.connect(self._on_approvals)
         self._bridge.questionAsked.connect(self._on_question)
         self._bridge.runFinished.connect(self._on_run_finished)
         self._bridge.errorOccurred.connect(self._on_agent_error)
@@ -286,17 +287,49 @@ class MainWindow(QMainWindow):
         self._append("输出" if ok else "输出(失败)", output)
 
     def _on_approval(self, approval: Approval) -> None:
+        self._show_approvals([approval])
+
+    def _on_approvals(self, approvals: tuple[Approval, ...]) -> None:
+        self._show_approvals(list(approvals))
+
+    def _show_approvals(self, approvals: list[Approval]) -> None:
+        if not approvals:
+            return
         self._pending_question = None
         self._question_box.setVisible(False)
-        self._pending_approval = approval
+        self._pending_approvals = approvals
         self._approval_remember.setChecked(False)
-        self._approval_label.setText(f"{approval.tool}（风险：{approval.risk}）")
-        self._approval_preview.setPlainText(approval.preview)
+
+        if len(approvals) == 1:
+            approval = approvals[0]
+            self._approval_label.setText(f"{approval.tool}（风险：{approval.risk}）")
+            self._approval_preview.setPlainText(approval.preview)
+            self._allow_button.setText("允许")
+            self._reject_button.setText("拒绝")
+            self._approval_remember.setText("本次会话允许相同操作")
+            self._notify("agent 已暂停", f"{approval.tool} 等待你确认")
+        else:
+            rank = {"low": 0, "medium": 1, "high": 2}
+            top = max((a.risk for a in approvals), key=lambda r: rank.get(r, 1))
+            self._approval_label.setText(
+                f"共 {len(approvals)} 个操作待确认（最高风险：{top}）"
+            )
+            self._approval_preview.setPlainText(
+                "\n\n".join(
+                    f"[{index}] {approval.tool}（风险：{approval.risk}）\n"
+                    f"{approval.preview}"
+                    for index, approval in enumerate(approvals, start=1)
+                )
+            )
+            self._allow_button.setText("全部允许")
+            self._reject_button.setText("全部拒绝")
+            self._approval_remember.setText("本次会话允许这些操作")
+            self._notify("agent 已暂停", f"{len(approvals)} 个操作等待你确认")
+
         self._approval_box.setVisible(True)
-        self._notify("agent 已暂停", f"{approval.tool} 等待你确认")
 
     def _on_question(self, question: Question) -> None:
-        self._pending_approval = None
+        self._pending_approvals = []
         self._approval_box.setVisible(False)
         self._pending_question = question
         self._question_text.setText(question.text)
@@ -340,16 +373,19 @@ class MainWindow(QMainWindow):
         self._vm.answer_question(question, answer)
 
     def _resolve(self, approved: bool) -> None:
-        if self._pending_approval is None:
+        if not self._pending_approvals:
             return
+        approvals = self._pending_approvals
         remember = approved and self._approval_remember.isChecked()
         self._approval_box.setVisible(False)
         self._approval_remember.setChecked(False)
-        self._vm.resolve_approval(self._pending_approval.id, approved, remember)
-        self._pending_approval = None
+        self._pending_approvals = []
+        self._vm.resolve_approvals(
+            [approval.id for approval in approvals], approved, remember
+        )
 
     def _on_run_finished(self, iterations: int) -> None:
-        self._pending_approval = None
+        self._pending_approvals = []
         self._pending_question = None
         self._approval_remember.setChecked(False)
         self._approval_box.setVisible(False)

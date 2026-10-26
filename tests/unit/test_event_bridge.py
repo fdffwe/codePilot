@@ -7,6 +7,7 @@ from codepilot.application.events import RunStarted
 from codepilot.domain.entities import Approval, Question, ToolCall
 from codepilot.domain.events import (
     ApprovalRequiredEvent,
+    ApprovalsRequiredEvent,
     ErrorEvent,
     MessageEvent,
     QuestionRequiredEvent,
@@ -66,6 +67,25 @@ def test_approval_requested_carries_entity() -> None:
     )
     bus.publish(ApprovalRequiredEvent(run_id="r1", seq=3, approval=approval))
     assert got == [approval]
+
+
+def test_batch_approvals_requested_carries_all_entities() -> None:
+    bus, bridge = _bridge()
+    got: list[tuple[Approval, ...]] = []
+    bridge.approvalsRequested.connect(got.append)
+    approvals = tuple(
+        Approval(
+            id=f"a{i}",
+            session_id="s1",
+            run_id="r1",
+            tool="write_file",
+            payload={},
+            preview="",
+        )
+        for i in (1, 2)
+    )
+    bus.publish(ApprovalsRequiredEvent(run_id="r1", seq=4, approvals=approvals))
+    assert got == [approvals]
 
 
 def test_question_required_maps_to_question_signal() -> None:

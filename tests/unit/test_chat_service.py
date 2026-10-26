@@ -22,6 +22,7 @@ from codepilot.domain.enums import MessageRole
 from codepilot.domain.events import (
     AgentEvent,
     ApprovalRequiredEvent,
+    ApprovalsRequiredEvent,
     MessageEvent,
     QuestionRequiredEvent,
     RunFinishedEvent,
@@ -88,6 +89,12 @@ class FakeOrchestrator:
         if isinstance(event, ApprovalRequiredEvent):
             approval = replace(event.approval, run_id=run_id, session_id=session_id)
             return replace(event, run_id=run_id, approval=approval)
+        if isinstance(event, ApprovalsRequiredEvent):
+            approvals = tuple(
+                replace(a, run_id=run_id, session_id=session_id)
+                for a in event.approvals
+            )
+            return replace(event, run_id=run_id, approvals=approvals)
         if isinstance(event, QuestionRequiredEvent):
             question = replace(event.question, run_id=run_id, session_id=session_id)
             return replace(event, run_id=run_id, question=question)
@@ -266,6 +273,68 @@ async def test_rejected_approval_is_not_remembered(tmp_path: Path) -> None:
     await service.resolve_approval("a1", approved=False, remember=True)
 
     assert orchestrator.remembered == []
+
+
+async def test_resolve_approvals_handles_batch_and_resumes_once(
+    tmp_path: Path,
+) -> None:
+    approvals = (
+        Approval(
+            id="a1",
+            session_id="",
+            run_id="r",
+            tool="write_file",
+            payload={"path": "a.py"},
+            preview="+ a",
+        ),
+        Approval(
+            id="a2",
+            session_id="",
+            run_id="r",
+            tool="write_file",
+            payload={"path": "b.py"},
+            preview="+ b",
+        ),
+    )
+    orchestrator = FakeOrchestrator(
+        [ApprovalsRequiredEvent(run_id="r", seq=0, approvals=approvals)],
+        [RunFinishedEvent(run_id="r", seq=0, iterations=1)],
+    )
+    service, _, repo, _ = _service(orchestrator, allowlist=[tmp_path])
+    session = await service.create_session(workspace_path=tmp_path)
+    await service.send(session.id, "写两个文件")
+    assert set(repo.data) == {"a1", "a2"}
+
+    await service.resolve_approvals(["a1", "a2"], approved=True, remember=True)
+
+    assert repo.data["a1"].status == "approved"
+    assert repo.data["a2"].status == "approved"
+    assert orchestrator.resumed == [(repo.data["a1"].run_id, True)]
+    assert orchestrator.remembered == [
+        (session.id, "write_file", {"path": "a.py"}),
+        (session.id, "write_file", {"path": "b.py"}),
+    ]
+
+
+async def test_resolve_approvals_rejects_cross_run_batch(tmp_path: Path) -> None:
+    orchestrator = FakeOrchestrator([], [])
+    service, _, repo, _ = _service(orchestrator, allowlist=[tmp_path])
+    session = await service.create_session(workspace_path=tmp_path)
+    for approval_id, run_id in (("a1", "r1"), ("a2", "r2")):
+        await repo.add(
+            Approval(
+                id=approval_id,
+                session_id=session.id,
+                run_id=run_id,
+                tool="write_file",
+                payload={},
+                preview="",
+            )
+        )
+
+    with pytest.raises(ValidationError):
+        await service.resolve_approvals(["a1", "a2"], approved=True)
+    assert orchestrator.resumed == []
 
 
 async def test_question_surfaces_not_persisted_and_answer_continues(

@@ -13,6 +13,7 @@ from codepilot.application.events import RunStarted
 from codepilot.domain.entities import Approval, Question
 from codepilot.domain.events import (
     ApprovalRequiredEvent,
+    ApprovalsRequiredEvent,
     ErrorEvent,
     MessageEvent,
     QuestionRequiredEvent,
@@ -28,6 +29,7 @@ class EventBridge(QObject):
     toolCalled = Signal(str, str)  # name, arguments
     toolResult = Signal(str, bool)  # output, ok
     approvalRequested = Signal(object)  # Approval
+    approvalsRequested = Signal(object)  # tuple[Approval, ...]
     questionAsked = Signal(object)  # Question
     runFinished = Signal(int)
     errorOccurred = Signal(str)
@@ -48,6 +50,8 @@ class EventBridge(QObject):
             self.toolResult.emit(event.output, event.ok)
         elif isinstance(event, ApprovalRequiredEvent):
             self.approvalRequested.emit(event.approval)
+        elif isinstance(event, ApprovalsRequiredEvent):
+            self.approvalsRequested.emit(event.approvals)
         elif isinstance(event, QuestionRequiredEvent):
             self.questionAsked.emit(event.question)
         elif isinstance(event, RunFinishedEvent):

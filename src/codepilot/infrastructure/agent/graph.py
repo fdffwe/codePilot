@@ -133,14 +133,17 @@ def prepare_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
 
 
 def approval_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
-    """处理当前一个交互；只有一个 ``interrupt()``，其余交给条件边自环。"""
+    """处理当前一个交互；只有一个 ``interrupt()``，其余交给条件边自环。
+
+    连续多个待审批调用合并为一批，一次确认整批；提问会截断批次，仍逐个处理，
+    以保持与模型调用顺序一致。
+    """
     pending = state.get("pending") or []
     cursor = state.get("cursor", 0)
     if cursor >= len(pending):
         return {"cursor": cursor}
 
     item = pending[cursor]
-    call_id = str(item["call_id"])
 
     if item.get("kind") == "question":
         answer = interrupt(
@@ -152,21 +155,41 @@ def approval_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
             }
         )
         answers = dict(state.get("answers") or {})
-        answers[call_id] = str(answer)
+        answers[str(item["call_id"])] = str(answer)
         return {"answers": answers, "cursor": cursor + 1}
 
-    approved = interrupt(
-        {
+    end = cursor
+    while end < len(pending) and pending[end].get("kind") == "approval":
+        end += 1
+    batch = pending[cursor:end]
+
+    if len(batch) == 1:
+        payload: dict[str, Any] = {
             "kind": "approval",
             "tool": item.get("tool", ""),
             "arguments": item.get("arguments") or {},
             "preview": item.get("preview", ""),
             "risk": item.get("risk", "medium"),
         }
-    )
+    else:
+        payload = {
+            "kind": "approvals",
+            "items": [
+                {
+                    "tool": entry.get("tool", ""),
+                    "arguments": entry.get("arguments") or {},
+                    "preview": entry.get("preview", ""),
+                    "risk": entry.get("risk", "medium"),
+                }
+                for entry in batch
+            ],
+        }
+
+    approved = bool(interrupt(payload))
     rejected = dict(state.get("rejected") or {})
-    rejected[call_id] = not bool(approved)
-    return {"rejected": rejected, "cursor": cursor + 1}
+    for entry in batch:
+        rejected[str(entry["call_id"])] = not approved
+    return {"rejected": rejected, "cursor": end}
 
 
 async def _invoke(

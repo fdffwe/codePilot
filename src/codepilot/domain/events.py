@@ -58,6 +58,13 @@ class ApprovalRequiredEvent(AgentEvent):
 
 
 @dataclass(frozen=True, slots=True)
+class ApprovalsRequiredEvent(AgentEvent):
+    """一批连续的非只读调用需人工确认；一次恢复决定整批结果。"""
+
+    approvals: tuple[Approval, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class QuestionRequiredEvent(AgentEvent):
     """Agent 需要用户澄清；run 在此暂停，待 ``answer``。"""
 
