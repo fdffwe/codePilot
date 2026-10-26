@@ -295,7 +295,12 @@ def _make_tool(
 read_file = _make_tool(
     coroutine=_read_file,
     name="read_file",
-    description="读取工作区内某个文本文件的内容。",
+    description=(
+        "读取工作区内一个 UTF-8 文本文件，返回完整内容。"
+        "仅支持文本：二进制文件会返回错误；内容不带行号、不分页，大文件会整体返回，"
+        "宜先用 glob/grep 定位再读。"
+        "示例：path='src/main.py'。"
+    ),
     args_schema=ReadFileArgs,
     safety=ToolSafety.READ,
     preview=_read_preview,
@@ -304,7 +309,11 @@ read_file = _make_tool(
 list_dir = _make_tool(
     coroutine=_list_dir,
     name="list_dir",
-    description="列出工作区内某目录下的条目名称（非递归）。",
+    description=(
+        "列出工作区内某目录下的直接条目名称（非递归，不含子目录里的内容），"
+        "目录在前、按名称排序。需要子目录内容时对子目录再调用一次。"
+        "示例：path='src'。"
+    ),
     args_schema=ListDirArgs,
     safety=ToolSafety.READ,
     preview=_list_preview,
@@ -314,10 +323,11 @@ glob_files = _make_tool(
     coroutine=_glob,
     name="glob",
     description=(
-        "按通配模式查找工作区内的文件，返回工作区相对路径。"
-        "pattern 支持 '**' 递归，如 '**/*.py'、'src/**/*.ts'；"
+        "按通配模式查找工作区内的文件，只返回文件路径（不含目录），"
         "默认跳过 .git、node_modules、构建产物等目录。"
-        "用于先定位文件，再配合 read_file/grep 查看内容。"
+        "pattern 中 * 和 ? 不跨目录，只有 ** 才递归；不含 / 的模式只匹配直接子项。"
+        "示例：pattern='**/*.py' 递归找全部 Python 文件；"
+        "pattern='*.md' 只找当前目录下的 Markdown。定位后再用 read_file/grep。"
     ),
     args_schema=GlobArgs,
     safety=ToolSafety.READ,
@@ -329,9 +339,10 @@ grep = _make_tool(
     name="grep",
     description=(
         "用正则表达式逐行搜索工作区内的文本文件，返回 '路径:行号: 内容'。"
-        "可用 glob 参数限定文件类型（如 '**/*.py'）；"
-        "默认跳过 .git、node_modules、二进制与超大文件。"
-        "结果超限时会显式提示截断，可缩小 pattern/path/glob 后重试。"
+        "仅逐行匹配，不支持跨行；默认跳过 .git、node_modules、二进制与超大文件。"
+        "可用 glob 参数限定文件类型。结果超限时会显式提示截断，"
+        "可缩小 pattern/path/glob 后重试。"
+        "示例：pattern='def main'、glob='**/*.py'；定位到行号后用 read_file 精读。"
     ),
     args_schema=GrepArgs,
     safety=ToolSafety.READ,
@@ -341,7 +352,12 @@ grep = _make_tool(
 write_file = _make_tool(
     coroutine=_write_file,
     name="write_file",
-    description="将内容写入工作区内的文件（覆盖写，父目录自动创建）。",
+    description=(
+        "将完整内容写入工作区内的文件，覆盖原有内容（父目录自动创建）。"
+        "只适合新建文件或整文件重写；修改已有文件请用 edit_file 做局部替换，"
+        "避免丢失未包含在 content 中的内容。"
+        "示例：path='notes.md', content='# 标题\\n'。"
+    ),
     args_schema=WriteFileArgs,
     safety=ToolSafety.WRITE,
     preview=_write_preview,
@@ -352,7 +368,10 @@ edit_file = _make_tool(
     name="edit_file",
     description=(
         "对工作区内的文件做精确字符串替换，无需重写整个文件。"
+        "old_string 必须与文件内容逐字符一致（含缩进、空白与换行），"
+        "不做模糊匹配或空白归一化；编辑前建议先 read_file 确认原文。"
         "默认要求 old_string 唯一；替换全部匹配时设置 replace_all=true。"
+        "示例：old_string='x = 1', new_string='x = 42'。"
     ),
     args_schema=EditFileArgs,
     safety=ToolSafety.WRITE,
@@ -365,7 +384,8 @@ ask_user = _make_tool(
     description=(
         "当需求不明确、缺少关键信息或存在多种合理做法时，向用户提问澄清，"
         "不要自行臆测。可提供候选选项；调用后 run 会暂停直到用户回答，"
-        "用户的回答会作为本工具的结果返回。"
+        "用户的回答会作为本工具的结果返回。不要用它确认已在当前对话中给出的信息。"
+        "示例：question='新模块用 alpha 还是 beta？', options=['alpha', 'beta']。"
     ),
     args_schema=AskUserArgs,
     safety=ToolSafety.ASK,
@@ -375,7 +395,12 @@ ask_user = _make_tool(
 run_command = _make_tool(
     coroutine=_run_command,
     name="run_command",
-    description="在工作区根目录执行一条命令并返回输出。argv 逐项给出，不经 shell。",
+    description=(
+        "在工作区根目录执行一条命令并返回输出。argv 逐项给出，不经 shell，"
+        "因此管道 |、重定向 >、通配符展开与变量替换都不会生效，"
+        "需要时拆成多条命令或改用相应工具。输出过长会被截断。"
+        "示例：argv=['uv', 'run', 'pytest', '-q']。"
+    ),
     args_schema=RunCommandArgs,
     safety=ToolSafety.EXEC,
     preview=_run_preview,

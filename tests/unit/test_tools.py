@@ -108,6 +108,13 @@ async def test_read_file_executes(tmp_path: Path) -> None:
     assert msg.tool_call_id == "c1"
 
 
+async def test_read_binary_raises_domain_error(tmp_path: Path) -> None:
+    """二进制文件应抛 DomainError，由图的 tools_node 转成 error ToolMessage。"""
+    (tmp_path / "bin.dat").write_bytes(b"\xff\xfe\x00")
+    with pytest.raises(DomainError, match="不是 UTF-8 文本"):
+        await _invoke("read_file", {"path": "bin.dat"}, tmp_path)
+
+
 async def test_glob_tool_returns_paths(tmp_path: Path) -> None:
     (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
     (tmp_path / "src").mkdir()

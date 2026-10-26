@@ -33,6 +33,18 @@ async def test_write_then_read_roundtrip(tmp_path: Path) -> None:
     assert await ws.read_text("pkg/mod.py") == "x = 1\n"
 
 
+async def test_read_binary_raises_validation(tmp_path: Path) -> None:
+    (tmp_path / "bin.dat").write_bytes(b"\xff\xfe\x00")
+    with pytest.raises(ValidationError):
+        await _workspace(tmp_path).read_text("bin.dat")
+
+
+async def test_read_directory_raises_validation(tmp_path: Path) -> None:
+    (tmp_path / "sub").mkdir()
+    with pytest.raises(ValidationError):
+        await _workspace(tmp_path).read_text("sub")
+
+
 async def test_edit_replaces_unique_occurrence(tmp_path: Path) -> None:
     ws = _workspace(tmp_path)
     await ws.write_text("mod.py", "x = 1\ny = 2\n")

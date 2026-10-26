@@ -92,6 +92,12 @@ class LocalDirectWorkspace:
             raise NotFoundError(f"文件不存在：{target}") from exc
         except PermissionError as exc:
             raise PermissionDeniedError(f"无读取权限：{target}") from exc
+        except UnicodeDecodeError as exc:
+            raise ValidationError(
+                f"文件不是 UTF-8 文本（可能是二进制）：{target}"
+            ) from exc
+        except IsADirectoryError as exc:
+            raise ValidationError(f"路径是目录而非文件：{target}") from exc
         except OSError as exc:
             raise DomainError(f"读取失败：{target}") from exc
 
